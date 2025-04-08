@@ -1,20 +1,18 @@
 #pragma once
 
-#include "channellayout.h"
-#include "codeccontext.h"
-#include "rational.h"
-#include "sampleformat.h"
-#include "stream.h"
+#include "vkvideo/medias/stream.hpp"
+#include "vkvideo/medias/video.hpp"
 
 #include <vkfw/vkfw.hpp>
-
 #include <vkvideo/context/display_mode.hpp>
 #include <vkvideo/core/types.hpp>
 #include <vkvideo/graphics/vk.hpp>
+#include <vkvideo/medias/ffmpeg.hpp>
 
 namespace vkvideo {
 
 class Context;
+class CodecContext;
 
 /// \brief Project setting arguments
 struct ContextArgs {
@@ -30,7 +28,7 @@ struct ContextArgs {
   i32 width, height;
 
   /// \brief Video frames per second
-  av::Rational fps;
+  ffmpeg::Rational fps;
 
   // audio-related properties
 
@@ -38,10 +36,10 @@ struct ContextArgs {
   i32 sample_rate;
 
   /// \brief Channel layout (currently mono and stereo is supported)
-  av::ChannelLayout ch_layout;
+  ffmpeg::ChannelLayout ch_layout;
 
   /// \brief Sample format
-  av::SampleFormat sample_format;
+  ffmpeg::SampleFormat sample_format;
 
   /// \brief Path of the output media file
   ///
@@ -54,19 +52,39 @@ private:
   vkfw::WindowHints window_hint() const;
 };
 
+enum class DecoderType {
+  eAuto = 0, // libwebp if is webp file, ffmpeg otherwise
+  eFFmpeg,
+  eLibWebP,
+};
+
+enum class DecodeMode {
+  eAuto = 0,
+  eStream,  // stream the file (for large media files)
+  eReadAll, // read everything to RAM/VRAM (for small media clips)
+};
+
+struct VideoArgs {
+  DecoderType type = DecoderType::eAuto;
+  HWAccel hwaccel = HWAccel::eAuto;
+  DecodeMode mode = DecodeMode::eAuto;
+};
+
 /// \brief Application context, containing a preview window and Vulkan objects
 class Context {
 public:
   Context(ContextArgs &&args);
 
-  template <class T, av::Direction dir>
-  void enable_hardware_acceleration(av::VideoCodecContext<T, dir> &ctx) {
-    vk.enable_hardware_acceleration(ctx);
-    ctx.raw()->get_format = [](auto...) { return AV_PIX_FMT_VULKAN; };
-    ctx.raw()->pix_fmt = AV_PIX_FMT_VULKAN;
-  }
+  void enable_hardware_acceleration(ffmpeg::CodecContext &cc);
 
+  vkfw::Window get_window() { return window.get(); }
   VkContext &get_vulkan() { return vk; }
+
+  std::unique_ptr<Video> open_video(std::string_view path,
+                                    const VideoArgs &args = {});
+
+  bool alive() const;
+  void update();
 
 private:
   ContextArgs args;

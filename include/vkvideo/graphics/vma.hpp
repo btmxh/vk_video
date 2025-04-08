@@ -1,9 +1,12 @@
 #pragma once
 
 #include "vkvideo/core/types.hpp"
-#include <span>
+
 #include <vk_mem_alloc.h>
+#include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_raii.hpp>
+
+#include <span>
 
 namespace vkvideo {
 
@@ -50,6 +53,7 @@ public:
 
   VmaBuffer &operator=(VmaBuffer &&rhs) {
     using std::swap;
+    swap(allocator, rhs.allocator);
     swap(buffer, rhs.buffer);
     swap(allocation, rhs.allocation);
     swap(alloc_info, rhs.alloc_info);
@@ -66,6 +70,47 @@ private:
   friend class VmaMappedBuffer;
   VmaAllocator allocator = nullptr;
   vk::Buffer buffer = nullptr;
+  VmaAllocation allocation;
+  VmaAllocationInfo alloc_info;
+};
+
+class VmaImage {
+public:
+  VmaImage(std::nullptr_t) : image{nullptr} {}
+  VmaImage(VmaAllocator allocator, vk::Image image, VmaAllocation allocation,
+           VmaAllocationInfo alloc_info)
+      : allocator{allocator}, image{image}, allocation{allocation},
+        alloc_info{alloc_info} {}
+
+  ~VmaImage() {
+    if (allocator) {
+      vmaDestroyImage(allocator, image, allocation);
+    }
+  }
+
+  VmaImage(const VmaImage &) = delete;
+  VmaImage &operator=(const VmaImage &) = delete;
+  VmaImage(VmaImage &&other)
+      : allocator{std::exchange(other.allocator, nullptr)},
+        image{std::move(other.image)}, allocation{std::move(other.allocation)},
+        alloc_info{std::move(other.alloc_info)} {}
+
+  VmaImage &operator=(VmaImage &&rhs) {
+    using std::swap;
+    swap(allocator, rhs.allocator);
+    swap(image, rhs.image);
+    swap(allocation, rhs.allocation);
+    swap(alloc_info, rhs.alloc_info);
+    return *this;
+  }
+
+  vk::Image get_image() const { return image; }
+  VmaAllocation get_allocation() const { return allocation; }
+  VmaAllocationInfo get_alloc_info() const { return alloc_info; }
+
+private:
+  VmaAllocator allocator = nullptr;
+  vk::Image image = nullptr;
   VmaAllocation allocation;
   VmaAllocationInfo alloc_info;
 };
@@ -92,8 +137,29 @@ public:
   operator VmaAllocator() const { return allocator; }
   VmaAllocator operator*() const { return allocator; }
 
+  vk::Result allocate(const vk::MemoryRequirements &reqs,
+                      const VmaAllocationCreateInfo &alloc_info,
+                      VmaAllocation &allocation,
+                      VmaAllocationInfo &allocation_info) {
+    return vk::Result{vmaAllocateMemory(
+        allocator, reinterpret_cast<const VkMemoryRequirements *>(&reqs),
+        &alloc_info, &allocation, &allocation_info)};
+  }
+
+  vk::Result map_memory(VmaAllocation allocation, void **data) {
+    return vk::Result{vmaMapMemory(allocator, allocation, data)};
+  }
+
+  void unmap_memory(VmaAllocation allocation) {
+    vmaUnmapMemory(allocator, allocation);
+  }
+
+  void free(VmaAllocation allocation) { vmaFreeMemory(allocator, allocation); }
+
   VmaBuffer createBuffer(const vk::BufferCreateInfo &create_info,
                          const VmaAllocationCreateInfo &alloc_info);
+  VmaImage createImage(const vk::ImageCreateInfo &create_info,
+                       const VmaAllocationCreateInfo &alloc_info);
 
 private:
   VmaAllocator allocator;

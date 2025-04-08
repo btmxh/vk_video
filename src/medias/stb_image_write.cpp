@@ -1,51 +1,80 @@
 #include "vkvideo/medias/stb_image_write.hpp"
+
 #include "codec.h"
 #include "codeccontext.h"
 #include "formatcontext.h"
 #include "videorescaler.h"
+#include "vkvideo/medias/ffmpeg.hpp"
+
 #include <libavcodec/avcodec.h>
+#include <libavutil/frame.h>
 
 namespace vkvideo {
 void write_img_grayscale(std::string_view filename, i32 width, i32 height,
                          const void *data) {
-  auto format = av::guessOutputFormat("", std::string{filename});
+  auto format = ffmpeg::guess_output_format({}, filename);
+  if (!format)
+    throw std::runtime_error("Unable to guess output format from filename");
 
-  av::FormatContext muxer;
-  auto codec_id = format.defaultVideoCodecId();
-  auto codec = av::findEncodingCodec(codec_id);
+  auto muxer = ffmpeg::OutputFormatContext::create(filename);
+
+  auto codec = ffmpeg::find_enc_codec(format->video_codec);
+  if (!codec)
+    throw std::runtime_error("Unable to find codec");
 
   AVPixelFormat *pix_fmts;
-  avcodec_get_supported_config(
-      nullptr, codec.raw(), AV_CODEC_CONFIG_PIX_FORMAT, 0,
-      const_cast<const void **>(reinterpret_cast<void **>(&pix_fmts)), nullptr);
+  ffmpeg::av_call(avcodec_get_supported_config(
+      nullptr, codec, AV_CODEC_CONFIG_PIX_FORMAT, 0,
+      const_cast<const void **>(reinterpret_cast<void **>(&pix_fmts)),
+      nullptr));
   auto pix_fmt = avcodec_find_best_pix_fmt_of_list(pix_fmts, AV_PIX_FMT_GRAY8,
                                                    false, nullptr);
 
-  av::VideoEncoderContext encoder{codec};
-  encoder.setWidth(width);
-  encoder.setHeight(height);
-  encoder.setTimeBase({1, 25});
-  encoder.setPixelFormat(pix_fmt);
+  auto encoder = ffmpeg::CodecContext::create(codec);
+  encoder->width = width;
+  encoder->height = height;
+  encoder->pix_fmt = pix_fmt;
+  encoder->time_base = {1, 25};
   encoder.open();
 
-  auto stream = muxer.addStream(encoder);
+  auto stream = muxer.add_stream(codec);
+  encoder.copy_params_to(stream->codecpar);
+  if (muxer->flags & AVFMT_GLOBALHEADER)
+    encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-  muxer.openOutput(std::string{filename});
-  muxer.writeHeader();
+  muxer.begin();
 
-  av::VideoFrame frame{static_cast<const u8 *>(data),
-                       static_cast<std::size_t>(width * height),
-                       AV_PIX_FMT_GRAY8, width, height};
-  av::VideoRescaler rescaler{width, height, encoder.pixelFormat(),
-                             width, height, AV_PIX_FMT_GRAY8};
-  auto rescale_frame = rescaler.rescale(frame);
-  auto packet = encoder.encode(rescale_frame);
-  if (packet)
-    muxer.writePacket(packet);
-  packet = encoder.encode();
-  if (packet)
-    muxer.writePacket(packet);
+  ffmpeg::Frame frame;
+  frame->format = AV_PIX_FMT_GRAY8;
+  frame->width = width;
+  frame->height = height;
+  ffmpeg::av_call(av_frame_get_buffer(frame.get(), 1));
+  std::memcpy(frame->data[0], data, width * height);
 
-  muxer.writeTrailer();
+  auto rescaled = ffmpeg::Frame::create();
+  rescaled->format = pix_fmt;
+  rescaled->width = width;
+  rescaled->height = height;
+
+  ffmpeg::VideoRescaler rescaler{};
+  rescaler.auto_rescale(rescaled, frame);
+
+  std::array<ffmpeg::Frame, 2> frames = {
+      std::move(rescaled),
+      nullptr, // flush frame
+  };
+
+  for (const auto &frame : frames) {
+    encoder.send_frame(frame);
+    while (true) {
+      auto [packet, err] = encoder.recv_packet();
+      if (err == ffmpeg::RecvError::eSuccess)
+        muxer.write_packet_interleaved(packet);
+      else
+        break;
+    }
+  }
+
+  muxer.end();
 }
 } // namespace vkvideo

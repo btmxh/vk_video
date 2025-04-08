@@ -7,3 +7,6 @@
 [submodule "extern/vk-bootstrap"]
 	path = extern/vk-bootstrap
 	url = https://github.com/charles-lunarg/vk-bootstrap
+[submodule "extern/mcpp-unique-any"]
+	path = extern/mcpp-unique-any
+	url = https://github.com/mika-fischer/mcpp-unique-any

@@ -4,3 +4,6 @@ build/
 # testing output files
 *.out
 output_*.png
+
+# gf2 debugger project file
+*.gf

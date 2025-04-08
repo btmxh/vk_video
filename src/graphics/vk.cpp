@@ -4,13 +4,18 @@
 #include "vkfw/vkfw.hpp"
 #include "vkvideo/graphics/vma.hpp"
 #include "vkvideo/medias/wrapper.hpp"
-#include <VkBootstrap.h>
+
 #include <vkvideo/core/utility.hpp>
 #include <vkvideo/version.h>
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_core.h>
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan_structs.hpp>
+
+#include <chrono>
+#include <optional>
+#include <stdexcept>
 
 extern "C" {
 #include <libavutil/hwcontext.h>
@@ -19,14 +24,35 @@ extern "C" {
 
 namespace vkvideo {
 
-void QueueMutexMap::lock(u32 qfi, u32 qi) {
-  std::scoped_lock _lck{main_mutex};
-  get_mutex(_lck, qfi, qi).lock();
-}
+inline VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData, void *) {
+  switch (static_cast<u32>(pCallbackData->messageIdNumber)) {
+  case 0x086974c1: /* BestPractices-vkCreateCommandPool-command-buffer-reset */
+  case 0xfd92477a: /* BestPractices-vkAllocateMemory-small-allocation */
+  case 0x618ab1e7: /* VUID-VkImageViewCreateInfo-usage-02275 */
+  case 0x30f4ac70: /* VUID-VkImageCreateInfo-pNext-06811 */
+  // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/9680
+  case 0x77c5e4e8:
+  case 0x79b1d0c3:
+  case 0xfd38b0b6:
+    return VK_FALSE;
+  default:
+    break;
+  }
 
-void QueueMutexMap::unlock(u32 qfi, u32 qi) {
-  std::scoped_lock _lck{main_mutex};
-  get_mutex(_lck, qfi, qi).unlock();
+  auto ms = vkb::to_string_message_severity(messageSeverity);
+  auto mt = vkb::to_string_message_type(messageType);
+  if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
+    printf("[%s: %s] %s - %s\n", ms, mt, pCallbackData->pMessageIdName,
+           pCallbackData->pMessage);
+  } else {
+    printf("[%s: %s] %s\n", ms, mt, pCallbackData->pMessage);
+  }
+
+  return VK_FALSE; // Applications must return false here (Except Validation, if
+                   // return true, will skip calling to driver)
 }
 
 std::mutex &QueueMutexMap::get_mutex(std::scoped_lock<std::mutex> &main_lock,
@@ -38,26 +64,46 @@ std::mutex &QueueMutexMap::get_mutex(std::scoped_lock<std::mutex> &main_lock,
 }
 
 VkContext::VkContext(vkfw::Window &window) {
+  feature_chain.get<vk::PhysicalDeviceFeatures2>()
+      .features.setVertexPipelineStoresAndAtomics(true)
+      .setShaderInt64(true)
+      .setFragmentStoresAndAtomics(true);
   feature_chain.get<vk::PhysicalDeviceVulkan11Features>()
       .setSamplerYcbcrConversion(true);
-  feature_chain.get<vk::PhysicalDeviceVulkan12Features>().setTimelineSemaphore(
-      true);
+  feature_chain.get<vk::PhysicalDeviceVulkan12Features>()
+      .setTimelineSemaphore(true)
+      .setVulkanMemoryModel(true)
+      .setVulkanMemoryModelDeviceScope(true)
+      .setBufferDeviceAddress(true)
+      .setUniformAndStorageBuffer8BitAccess(true);
   feature_chain.get<vk::PhysicalDeviceVulkan13Features>().setSynchronization2(
       true);
   feature_chain.get<vk::PhysicalDeviceVideoMaintenance1FeaturesKHR>()
       .setVideoMaintenance1(true);
-  auto b_inst = vkb::InstanceBuilder{}
-                    // .request_validation_layers()
-                    // .use_default_debug_messenger()
-                    .require_api_version(VK_API_VERSION_1_3)
-                    .set_app_name("vkvideo")
-                    .set_app_version(VK_MAKE_VERSION(VKVIDEO_VERSION_MAJOR,
-                                                     VKVIDEO_VERSION_MINOR,
-                                                     VKVIDEO_VERSION_PATCH))
-                    .set_engine_name("vkvideo")
-                    .set_engine_version(VK_MAKE_VERSION(VKVIDEO_VERSION_MAJOR,
-                                                        VKVIDEO_VERSION_MINOR,
-                                                        VKVIDEO_VERSION_PATCH));
+  auto b_inst =
+      vkb::InstanceBuilder{}
+          .request_validation_layers()
+          // .add_validation_feature_enable(
+          //     VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
+          .add_validation_feature_enable(
+              VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+          .add_validation_feature_enable(
+              VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
+          .add_validation_feature_enable(
+              VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
+          // .use_default_debug_messenger()
+          .set_debug_callback(default_debug_callback)
+          .add_debug_messenger_severity(
+              VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+          .require_api_version(VK_API_VERSION_1_3)
+          .set_app_name("vkvideo")
+          .set_app_version(VK_MAKE_VERSION(VKVIDEO_VERSION_MAJOR,
+                                           VKVIDEO_VERSION_MINOR,
+                                           VKVIDEO_VERSION_PATCH))
+          .set_engine_name("vkvideo")
+          .set_engine_version(VK_MAKE_VERSION(VKVIDEO_VERSION_MAJOR,
+                                              VKVIDEO_VERSION_MINOR,
+                                              VKVIDEO_VERSION_PATCH));
   bool headless = vkfw::getPlatform() == vkfw::Platform::eNull;
   if (headless) {
     b_inst.set_headless();
@@ -84,7 +130,7 @@ VkContext::VkContext(vkfw::Window &window) {
 
   vkb::PhysicalDeviceSelector selector{vkb_inst};
   auto r_phys_device =
-      selector.set_minimum_version(1, 4).set_surface(*surface).select();
+      selector.set_minimum_version(1, 3).set_surface(*surface).select();
 
   if (!r_phys_device.has_value()) {
     throw std::runtime_error{r_phys_device.error().message()};
@@ -94,7 +140,6 @@ VkContext::VkContext(vkfw::Window &window) {
   device_extensions = std::vector<const char *>{
       vk::EXTExternalMemoryDmaBufExtensionName,
       vk::EXTImageDrmFormatModifierExtensionName,
-      vk::KHRBindMemory2ExtensionName,
       vk::KHRExternalMemoryFdExtensionName,
       vk::KHRExternalSemaphoreFdExtensionName,
       vk::EXTExternalMemoryHostExtensionName,
@@ -143,7 +188,7 @@ VkContext::VkContext(vkfw::Window &window) {
 
   hwdevice_ctx.reset(hwdevice_ctx_ptr);
   auto &hwdevice_ctx_data =
-      *reinterpret_cast<AVHWDeviceContext *>(hwdevice_ctx.data().data());
+      *reinterpret_cast<AVHWDeviceContext *>(hwdevice_ctx->data);
   auto &vk_device_ctx =
       *reinterpret_cast<AVVulkanDeviceContext *>(hwdevice_ctx_data.hwctx);
 
@@ -209,11 +254,104 @@ VkContext::VkContext(vkfw::Window &window) {
   });
   set_qf(vk_device_ctx.queue_family_decode_index,
          vk_device_ctx.nb_decode_queues, it - qf_props.begin());
+  vk_device_ctx.memory_alloc_cb = [](AVHWDeviceContext *ctx,
+                                     VkMemoryRequirements *req,
+                                     VkMemoryPropertyFlagBits req_flags,
+                                     void *alloc_extension,
+                                     VkMemoryPropertyFlagBits *mem_flags,
+                                     AVVulkanDeviceMemory *out_mem) {
+    bool dedicated_alloc = false;
+    if (alloc_extension) {
+      for (auto pNext = static_cast<const VkBaseInStructure *>(alloc_extension);
+           pNext;
+           pNext = static_cast<const VkBaseInStructure *>(pNext->pNext)) {
+        if (static_cast<VkBaseInStructure *>(alloc_extension)->sType ==
+            VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO) {
+          dedicated_alloc = true;
+        }
+      }
+
+      // TODO: use memory pool to allocate memory for other pNext values
+    }
+
+    VmaAllocation allocation;
+    VmaAllocationInfo allocation_info;
+    VmaAllocationCreateInfo alloc_info = {
+        .flags = dedicated_alloc ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
+                                 : static_cast<VmaAllocationCreateFlags>(0),
+        .requiredFlags = static_cast<VkMemoryPropertyFlags>(
+            static_cast<u32>(req_flags) == UINT32_MAX ? 0 : req_flags),
+    };
+    auto &allocator = static_cast<VkContext *>(ctx->user_opaque)->allocator;
+    auto ret =
+        allocator.allocate(*reinterpret_cast<vk::MemoryRequirements *>(req),
+                           alloc_info, allocation, allocation_info);
+    if (ret != vk::Result::eSuccess) {
+      auto msg = vk::to_string(ret);
+      av_log(ctx, AV_LOG_ERROR, "Failed to allocate memory: %s\n", msg.c_str());
+      return AVERROR(ENOMEM);
+    }
+
+    out_mem->memory = allocation_info.deviceMemory;
+    out_mem->offset = allocation_info.offset;
+    if (mem_flags)
+      vmaGetAllocationMemoryProperties(
+          *allocator, allocation,
+          reinterpret_cast<VkMemoryPropertyFlags *>(mem_flags));
+    out_mem->user = allocation;
+
+    return 0;
+  };
+
+  vk_device_ctx.memory_free_cb = [](AVHWDeviceContext *ctx,
+                                    const AVVulkanDeviceMemory *mem) {
+    auto &allocator = static_cast<VkContext *>(ctx->user_opaque)->allocator;
+    allocator.free(static_cast<VmaAllocation>(mem->user));
+  };
+
+  vk_device_ctx.memory_map_cb = [](AVHWDeviceContext *ctx,
+                                   const AVVulkanDeviceMemory *mem,
+                                   std::size_t size, void **ptr) {
+    auto &allocator = static_cast<VkContext *>(ctx->user_opaque)->allocator;
+    auto ret = allocator.map_memory(static_cast<VmaAllocation>(mem->user), ptr);
+    if (ret != vk::Result::eSuccess) {
+      auto msg = vk::to_string(ret);
+      av_log(ctx, AV_LOG_ERROR, "Failed to map memory: %s\n", msg.c_str());
+      return AVERROR_EXTERNAL;
+    }
+    return 0;
+  };
+
+  vk_device_ctx.memory_unmap_cb = [](AVHWDeviceContext *ctx,
+                                     const AVVulkanDeviceMemory *mem) {
+    auto &allocator = static_cast<VkContext *>(ctx->user_opaque)->allocator;
+    allocator.unmap_memory(static_cast<VmaAllocation>(mem->user));
+  };
 
   int err = av_hwdevice_ctx_init(hwdevice_ctx.get());
   if (err < 0)
     av::throws_if(av::OptionalErrorCode::null(), err, av::ffmpeg_category());
 
   allocator = VkMemAllocator::create(instance, physical_device, device);
+  qf_graphics = vk_device_ctx.queue_family_index;
+  qf_compute = vk_device_ctx.queue_family_comp_index;
+  qf_transfer = vk_device_ctx.queue_family_tx_index;
+
+  q_graphics = device.getQueue(qf_graphics, 0);
+
+  window.callbacks()->on_framebuffer_resize = [&](vkfw::Window w, size_t width,
+                                                  size_t height) {
+    if (width > 0 && height > 0)
+      swapchain_ctx.recreate(static_cast<i32>(width), static_cast<i32>(height));
+  };
+
+  tx_pool.init(device, mutexes);
+  swapchain_ctx = VkSwapchainContext{
+      device, r_device.value(), window, surface, q_graphics, 3,
+  };
+}
+
+void VkContext::enable_hardware_acceleration(ffmpeg::CodecContext &ctx) {
+  ctx->hw_device_ctx = av_buffer_ref(hwdevice_ctx.get());
 }
 } // namespace vkvideo

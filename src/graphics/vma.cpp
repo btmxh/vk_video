@@ -62,4 +62,18 @@ VkMemAllocator::createBuffer(const vk::BufferCreateInfo &create_info,
       result, VmaBuffer{allocator, buffer, allocation, allocation_info});
 }
 
+vk::ResultValueType<VmaImage>::type
+VkMemAllocator::createImage(const vk::ImageCreateInfo &create_info,
+                            const VmaAllocationCreateInfo &alloc_info) {
+  VkImage image;
+  VmaAllocation allocation;
+  VmaAllocationInfo allocation_info;
+  vk::Result result{vmaCreateImage(
+      allocator, reinterpret_cast<const VkImageCreateInfo *>(&create_info),
+      &alloc_info, &image, &allocation, &allocation_info)};
+  vk::detail::resultCheck(result, "vma::createImage");
+  return vk::detail::createResultValueType(
+      result, VmaImage{allocator, image, allocation, allocation_info});
+}
+
 } // namespace vkvideo

@@ -1,7 +1,8 @@
 #pragma once
 
-#include <span>
 #include <vkvideo/core/types.hpp>
+
+#include <span>
 
 extern "C" {
 #include <libavutil/buffer.h>

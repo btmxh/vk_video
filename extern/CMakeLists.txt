@@ -9,3 +9,4 @@ set(AV_ENABLE_SHARED  OFF CACHE BOOL "" FORCE)
 add_subdirectory(avcpp)
 
 add_subdirectory(vk-bootstrap)
+add_subdirectory(mcpp-unique-any)
