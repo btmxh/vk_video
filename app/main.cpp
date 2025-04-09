@@ -69,8 +69,6 @@ int main(int argc, char *argv[]) {
     present_sems.emplace_back(vk.get_device(), vk::SemaphoreCreateInfo{});
   }
 
-  video->wait_for_load(INT64_MAX);
-
   {
     auto video_frame = video->get_frame(0);
     assert(video_frame.has_value() && video_frame->data->planes.size() == 1);
@@ -85,8 +83,8 @@ int main(int argc, char *argv[]) {
       vk::ImageMemoryBarrier2 barrier{
           .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
           .srcAccessMask = vk::AccessFlagBits2::eNone,
-          .dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
-          .dstAccessMask = vk::AccessFlagBits2::eNone,
+          .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+          .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
           .oldLayout = plane.layout,
           .newLayout = vk::ImageLayout::eTransferSrcOptimal,
           .srcQueueFamilyIndex = plane.queue_family_idx,
@@ -103,12 +101,13 @@ int main(int argc, char *argv[]) {
       vk::SemaphoreSubmitInfo wait_sem{
           .semaphore = plane.semaphore,
           .value = plane.semaphore_value,
-          .stageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+          .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
       };
+
       auto [rel_sem, rel_sem_value] = vk.get_temp_pools().end(
           std::move(cmd_buf), plane.queue_family_idx, {}, wait_sem);
 
-      rel_sem->wait(rel_sem_value, UINT64_MAX);
+      // rel_sem->wait(rel_sem_value, UINT64_MAX);
 
       cmd_buf = vk.get_temp_pools().begin(vk.get_qf_graphics());
       cmd_buf.begin(vk::CommandBufferBeginInfo{
@@ -140,7 +139,7 @@ int main(int argc, char *argv[]) {
   auto start_time = std::chrono::high_resolution_clock::now();
   auto prev_time = start_time;
 
-  for (vkv::i32 i = 0; context.alive(); ++i) {
+  for (vkv::i32 i = 0; i < 2 && context.alive(); ++i) {
     context.update();
 
     auto now = std::chrono::high_resolution_clock::now();
@@ -186,7 +185,8 @@ int main(int argc, char *argv[]) {
             vk::DependencyInfo{}.setImageMemoryBarriers(sc_img_trans));
       }
       video->seek(0);
-      auto video_frame = video->get_frame(elapsed_from_start.count() % (vkv::i64)1e9);
+      auto video_frame =
+          video->get_frame(elapsed_from_start.count() % (vkv::i64)1e9);
       assert(video_frame.has_value() && video_frame->data->planes.size() == 1);
       auto &plane = video_frame->data->planes.front();
       if (plane.layout != vk::ImageLayout::eTransferSrcOptimal ||
