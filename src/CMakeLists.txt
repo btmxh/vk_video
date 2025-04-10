@@ -21,8 +21,10 @@ configure_file (
 
 
 target_include_directories(vkvideo PUBLIC ../include)
-target_include_directories(vkvideo PUBLIC "${VkVideo_SOURCE_DIR}/include")
-target_include_directories(vkvideo PUBLIC "${VkVideo_BINARY_DIR}/include")
+target_include_directories(vkvideo PUBLIC
+  "${VkVideo_SOURCE_DIR}/include"
+  "${VkVideo_BINARY_DIR}/include"
+)
 target_compile_features(vkvideo PUBLIC cxx_std_20)
 
 target_link_libraries(vkvideo PUBLIC
@@ -30,9 +32,8 @@ target_link_libraries(vkvideo PUBLIC
   Vulkan::Vulkan
   GPUOpen::VulkanMemoryAllocator
   vk-bootstrap
-  avcpp::avcpp
   mcpp::unique-any
-  "${FFmpeg_LIBRARIES}"
+  FFmpeg::FFmpeg
 )
 
 if(WebP_FOUND)
@@ -42,6 +43,7 @@ endif()
 
 target_precompile_headers(vkvideo
   PUBLIC <vulkan/vulkan.hpp>
+  PUBLIC <vulkan/vulkan_raii.hpp>
   PUBLIC <vkfw/vkfw.hpp>
 )
 target_include_directories(vkvideo PUBLIC "${FFmpeg_INCLUDE_DIRS}")

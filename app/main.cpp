@@ -36,13 +36,6 @@ int main(int argc, char *argv[]) {
 
   auto video = context.open_video(argv[1], {.hwaccel = vkv::HWAccel::eOff,
                                             .mode = vkv::DecodeMode::eReadAll});
-  using namespace std::chrono_literals;
-  auto to_ns = [](auto x) {
-    return static_cast<vkv::i64>(std::chrono::nanoseconds{x}.count());
-  };
-  auto frame = video->get_frame(to_ns(10ns));
-  assert(frame);
-  std::cout << frame->frame_index.value() << std::endl;
 
   auto &vk = context.get_vulkan();
   vkr::CommandPool pool{
@@ -69,10 +62,8 @@ int main(int argc, char *argv[]) {
     present_sems.emplace_back(vk.get_device(), vk::SemaphoreCreateInfo{});
   }
 
-  {
-    auto video_frame = video->get_frame(0);
-    assert(video_frame.has_value() && video_frame->data->planes.size() == 1);
-    auto &plane = video_frame->data->planes.front();
+  auto handle_transition = [&](vkv::VideoFrame &video_frame) {
+    auto &plane = video_frame.data->planes.front();
 
     // handle queue ownership transfer...
     if (plane.queue_family_idx != vk.get_qf_graphics() &&
@@ -81,9 +72,9 @@ int main(int argc, char *argv[]) {
       cmd_buf.begin(vk::CommandBufferBeginInfo{
           .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
       vk::ImageMemoryBarrier2 barrier{
-          .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-          .srcAccessMask = vk::AccessFlagBits2::eNone,
-          .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+          .srcStageMask = plane.stage,
+          .srcAccessMask = plane.access,
+          .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
           .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
           .oldLayout = plane.layout,
           .newLayout = vk::ImageLayout::eTransferSrcOptimal,
@@ -101,13 +92,11 @@ int main(int argc, char *argv[]) {
       vk::SemaphoreSubmitInfo wait_sem{
           .semaphore = plane.semaphore,
           .value = plane.semaphore_value,
-          .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
+          .stageMask = plane.stage,
       };
 
       auto [rel_sem, rel_sem_value] = vk.get_temp_pools().end(
           std::move(cmd_buf), plane.queue_family_idx, {}, wait_sem);
-
-      // rel_sem->wait(rel_sem_value, UINT64_MAX);
 
       cmd_buf = vk.get_temp_pools().begin(vk.get_qf_graphics());
       cmd_buf.begin(vk::CommandBufferBeginInfo{
@@ -119,7 +108,7 @@ int main(int argc, char *argv[]) {
       vk::SemaphoreSubmitInfo wait_sem2{
           .semaphore = *rel_sem,
           .value = rel_sem_value,
-          .stageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+          .stageMask = vk::PipelineStageFlagBits2::eBlit,
       };
       auto [acq_sem, acq_sem_value] = vk.get_temp_pools().end(
           std::move(cmd_buf), vk.get_qf_graphics(), rel_sem, wait_sem2);
@@ -128,18 +117,55 @@ int main(int argc, char *argv[]) {
       plane.semaphore_value = acq_sem_value;
       plane.layout = vk::ImageLayout::eTransferSrcOptimal;
       plane.queue_family_idx = vk.get_qf_graphics();
-      video_frame->data->buf =
-          std::pair{std::move(video_frame->data->buf), acq_sem};
+      plane.stage = vk::PipelineStageFlagBits2::eBlit;
+      plane.access = vk::AccessFlagBits2::eTransferRead;
+      video_frame.data->buf =
+          std::pair{std::move(video_frame.data->buf), acq_sem};
     } else if (plane.layout != vk::ImageLayout::eTransferSrcOptimal) {
-      // TODO: handle this case similarly
-      std::unreachable();
+      auto cmd_buf = vk.get_temp_pools().begin(vk.get_qf_graphics());
+      cmd_buf.begin(vk::CommandBufferBeginInfo{
+          .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+      vk::ImageMemoryBarrier2 barrier{
+          .srcStageMask = plane.stage,
+          .srcAccessMask = plane.access,
+          .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+          .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+          .oldLayout = plane.layout,
+          .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+          .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+          .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+          .image = plane.image,
+          .subresourceRange = {
+              .aspectMask = vk::ImageAspectFlagBits::eColor,
+              .levelCount = 1,
+              .layerCount = static_cast<vkv::u32>(plane.num_layers),
+          }};
+      cmd_buf.pipelineBarrier2(
+          vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+      cmd_buf.end();
+
+      vk::SemaphoreSubmitInfo wait_sem{
+          .semaphore = plane.semaphore,
+          .value = plane.semaphore_value,
+          .stageMask = plane.stage,
+      };
+      auto [trans_sem, trans_sem_value] = vk.get_temp_pools().end(
+          std::move(cmd_buf), vk.get_qf_graphics(), {}, wait_sem);
+
+      plane.semaphore = **trans_sem;
+      plane.semaphore_value = trans_sem_value;
+      plane.layout = vk::ImageLayout::eTransferSrcOptimal;
+      plane.stage = vk::PipelineStageFlagBits2::eBlit;
+      plane.access = vk::AccessFlagBits2::eTransferRead;
+      video_frame.data->buf =
+          std::pair{std::move(video_frame.data->buf), trans_sem};
     }
-  }
+  };
 
   auto start_time = std::chrono::high_resolution_clock::now();
   auto prev_time = start_time;
 
-  for (vkv::i32 i = 0; i < 2 && context.alive(); ++i) {
+  for (vkv::i32 i = 0; context.alive(); ++i) {
     context.update();
 
     auto now = std::chrono::high_resolution_clock::now();
@@ -150,15 +176,11 @@ int main(int argc, char *argv[]) {
 
     auto &present = context.get_vulkan().get_swapchain_ctx();
     auto frame = present.begin_frame();
-    if (frame.frame_idx % 100 == 0) {
-      std::cout << elapsed.count() << '\n';
-      std::cout << "current time" << elapsed_from_start.count() << '\n';
-    }
 
     cmd_buf_sems[frame.fif_idx].wait(frame.frame_idx, INT64_MAX);
     if (auto image_opt = frame.acquire_image(UINT64_MAX);
         image_opt.has_value()) {
-      auto [image_idx, image] = image_opt.value();
+      auto [image_idx, image, image_size] = image_opt.value();
       // record cmdbuf
       auto &cmd_buf = cmd_bufs[frame.fif_idx];
       cmd_buf.begin(vk::CommandBufferBeginInfo{
@@ -184,63 +206,12 @@ int main(int argc, char *argv[]) {
         cmd_buf.pipelineBarrier2(
             vk::DependencyInfo{}.setImageMemoryBarriers(sc_img_trans));
       }
-      video->seek(0);
-      auto video_frame =
-          video->get_frame(elapsed_from_start.count() % (vkv::i64)1e9);
-      assert(video_frame.has_value() && video_frame->data->planes.size() == 1);
-      auto &plane = video_frame->data->planes.front();
-      if (plane.layout != vk::ImageLayout::eTransferSrcOptimal ||
-          (plane.queue_family_idx != vk.get_qf_graphics() &&
-           plane.queue_family_idx != vk::QueueFamilyIgnored)) {
-        auto trans_cmd_buf = vk.get_temp_pools().begin(plane.queue_family_idx);
-        trans_cmd_buf.begin(vk::CommandBufferBeginInfo{
-            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-        // image transition on another command buffer
-        vk::ImageMemoryBarrier2 frame_img_trans{
-            .srcStageMask = plane.stage,
-            .srcAccessMask = plane.access,
-            .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
-            .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
-            .oldLayout = plane.layout,
-            .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-            .srcQueueFamilyIndex = plane.queue_family_idx,
-            .dstQueueFamilyIndex = static_cast<vkv::u32>(vk.get_qf_graphics()),
-            .image = plane.image,
-            .subresourceRange =
-                {
-                    .aspectMask = vk::ImageAspectFlagBits::eColor,
-                    .levelCount = 1,
-                    .layerCount = static_cast<vkv::u32>(plane.num_layers),
-                },
-        };
-
-        trans_cmd_buf.pipelineBarrier2(
-            vk::DependencyInfo{}.setImageMemoryBarriers(frame_img_trans));
-        trans_cmd_buf.end();
-        auto [trans_sem, trans_sem_value] = vk.get_temp_pools().end(
-            std::move(trans_cmd_buf), plane.queue_family_idx);
-
-        // after transition, update the plane
-        plane.layout = vk::ImageLayout::eTransferSrcOptimal;
-        plane.stage = vk::PipelineStageFlagBits2::eBlit;
-        plane.access = vk::AccessFlagBits2::eTransferRead;
-        plane.semaphore = *trans_sem;
-        plane.semaphore_value = trans_sem_value;
-        plane.queue_family_idx = vk.get_qf_graphics();
-
-        // transfer ownership of `trans_sem` to the frame,
-        // TODO: if multiple image transitions are needed,
-        //       make it possible to remove semaphores
-        //       from the buf
-        auto new_buf = std::pair{std::move(video_frame->data->buf), trans_sem};
-        video_frame->data->buf = std::move(new_buf);
-
-        // next time, transition should not happen as the layout and
-        // queue_family_idx should be both updated
-      }
+      auto video_frame = video->get_frame(elapsed_from_start.count() %
+                                          video->get_duration().value_or(1e9));
       // blit
-      {
-        std::cout << video_frame->frame_index.value() << std::endl;
+      if (video_frame.has_value()) {
+        auto &plane = video_frame->data->planes.front();
+        handle_transition(video_frame.value());
         vk::ImageBlit2 region{
             .srcSubresource =
                 {
@@ -258,7 +229,9 @@ int main(int argc, char *argv[]) {
 
         region.srcOffsets[1] = vk::Offset3D{video_frame->data->width,
                                             video_frame->data->height, 1};
-        region.dstOffsets[1] = vk::Offset3D{frame.width, frame.height, 1};
+        region.dstOffsets[1] =
+            vk::Offset3D{static_cast<vkv::i32>(image_size.width),
+                         static_cast<vkv::i32>(image_size.height), 1};
         cmd_buf.blitImage2(vk::BlitImageInfo2{
             .srcImage = plane.image,
             .srcImageLayout = plane.layout,
@@ -267,6 +240,8 @@ int main(int argc, char *argv[]) {
             .filter = vk::Filter::eLinear,
         }
                                .setRegions(region));
+      } else {
+        video->seek(0);
       }
       // transition: eTransferDstOptimal -> ePresentSrcKHR
       {
@@ -294,17 +269,20 @@ int main(int argc, char *argv[]) {
         vk::CommandBufferSubmitInfo cmd_buf_info{
             .commandBuffer = cmd_buf,
         };
-        vk::SemaphoreSubmitInfo wait_sem_info[2]{
-            {
-                .semaphore = plane.semaphore,
-                .value = plane.semaphore_value,
-                .stageMask = plane.stage,
-            },
+        std::vector<vk::SemaphoreSubmitInfo> wait_sem_info{
             {
                 .semaphore = frame.image_acq_sem,
                 .stageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
             },
         };
+        if (video_frame.has_value()) {
+          auto &plane = video_frame->data->planes.front();
+          wait_sem_info.push_back({
+              .semaphore = plane.semaphore,
+              .value = plane.semaphore_value,
+              .stageMask = plane.stage,
+          });
+        }
         vk::SemaphoreSubmitInfo sig_sem_info[2]{
             {
                 .semaphore = cmd_buf_sems[frame.fif_idx],

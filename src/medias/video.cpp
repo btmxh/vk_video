@@ -16,7 +16,8 @@ extern "C" {
 }
 
 namespace vkvideo {
-std::optional<VideoFrame> VideoStream::get_frame(i64 time) {
+std::optional<VideoFrame> VideoStream::get_frame_monotonic(i64 time) {
+  Video::get_frame_monotonic(time);
   assert(frame);
   while (true) {
     if (frame->pts + frame->duration > time) {
@@ -219,7 +220,8 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
   image_plane.num_layers = static_cast<i32>(rescaled_frames.size());
 }
 
-std::optional<VideoFrame> VideoVRAM::get_frame(i64 time) {
+std::optional<VideoFrame> VideoVRAM::get_frame_monotonic(i64 time) {
+  Video::get_frame_monotonic(time);
   if (timestamps.empty() || time < 0 || time > timestamps.back())
     return std::nullopt;
 
@@ -228,9 +230,6 @@ std::optional<VideoFrame> VideoVRAM::get_frame(i64 time) {
   while (time >= timestamps[last_frame_idx] &&
          last_frame_idx < timestamps.size())
     last_frame_idx++;
-
-  std::cout << time << " " << timestamps[0] << " " << last_frame_idx
-            << std::endl;
 
   if (last_frame_idx == timestamps.size())
     return std::nullopt;
@@ -243,6 +242,7 @@ std::optional<VideoFrame> VideoVRAM::get_frame(i64 time) {
 }
 
 void VideoVRAM::seek(i64 time) {
+  Video::seek(time);
   last_frame_idx =
       std::lower_bound(timestamps.begin(), timestamps.end(), time) -
       timestamps.begin();

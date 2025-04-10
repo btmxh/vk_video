@@ -58,9 +58,10 @@ open_video_stream(Context &c, std::string_view path, DecoderType type) {
     return std::make_unique<FFmpegStream>(path, c);
   case DecoderType::eLibWebP:
     return std::make_unique<AnimWebPStream>(path);
-  default:
-    std::unreachable();
+  default:;
   }
+
+  throw std::runtime_error{"Invalid decoder type"};
 }
 
 std::unique_ptr<Video> Context::open_video(std::string_view path,
@@ -70,7 +71,7 @@ std::unique_ptr<Video> Context::open_video(std::string_view path,
   if (mode == DecodeMode::eAuto) {
     mode = DecodeMode::eStream;
 
-    auto num_frames_est = stream->estimate_num_frames();
+    auto num_frames_est = stream->get_num_frames();
     if (num_frames_est.has_value() && num_frames_est.value() < 64) {
       mode = DecodeMode::eReadAll;
     }
@@ -84,7 +85,7 @@ std::unique_ptr<Video> Context::open_video(std::string_view path,
   default:;
   }
 
-  std::unreachable();
+  throw std::runtime_error{"Invalid decode mode"};
 }
 
 bool Context::alive() const { return !window->shouldClose(); }

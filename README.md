@@ -21,7 +21,7 @@ cmake -S. -Bbuild
 
 # or if you built ffmpeg from scratch for a better debugging experience,
 # override the pkg-config paths
-cmake -S. -Bbuild -DPC_FFMPEG_LIBRARY_DIRS=/usr/local/lib -DPC_FFMPEG_INCLUDE_DIRS=/usr/local/include
+PKG_CONFIG_PATH=/usr/local/lib/pkgconfig/ cmake -S. -Bbuild
 
 # build
 cmake --build build -j

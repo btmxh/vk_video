@@ -21,7 +21,8 @@ public:
   virtual std::pair<ffmpeg::Frame, bool>
   next_frame(ffmpeg::Frame &&frame = {}) = 0;
   virtual bool seek(i64 pos) { return false; }
-  virtual std::optional<i32> estimate_num_frames() { return std::nullopt; }
+  virtual std::optional<i32> get_num_frames() { return std::nullopt; }
+  virtual std::optional<i64> get_duration() { return std::nullopt; }
 };
 
 enum class HWAccel {
@@ -40,7 +41,9 @@ public:
   std::pair<ffmpeg::Frame, bool>
   next_frame(ffmpeg::Frame &&frame = {}) override;
   bool seek(i64 pos) override;
-  std::optional<i32> estimate_num_frames() override;
+
+  std::optional<i32> get_num_frames() override;
+  std::optional<i64> get_duration() override;
 
 private:
   ffmpeg::InputFormatContext demuxer;
@@ -60,7 +63,9 @@ public:
   std::pair<ffmpeg::Frame, bool>
   next_frame(ffmpeg::Frame &&frame = {}) override;
   bool seek(i64 pos) override;
-  std::optional<i32> estimate_num_frames() override;
+
+  std::optional<i32> get_num_frames() override;
+  std::optional<i64> get_duration() override;
 
 private:
   struct WebPAnimDecoderDeleter {
@@ -74,6 +79,7 @@ private:
   std::unique_ptr<WebPAnimDecoder, WebPAnimDecoderDeleter> decoder;
   WebPAnimInfo info;
   i64 last_pts = 0;
+  std::optional<i64> duration;
 };
 #endif
 

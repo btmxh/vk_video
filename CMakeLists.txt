@@ -21,6 +21,7 @@ endif()
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(WebP CONFIG)
+find_package(FFmpeg COMPONENTS AVCODEC AVUTIL AVFORMAT SWSCALE SWRESAMPLE REQUIRED)
 add_subdirectory(extern)
 
 find_program(CCACHE_PROGRAM ccache)

@@ -18,9 +18,9 @@ struct FrameInfo {
   vk::Semaphore image_acq_sem;
   i32 frame_idx;
   i32 fif_idx; // frame_idx % num_frames_in_flight, provided for convenience
-  i32 width, height;
 
-  std::optional<std::pair<i32, vk::Image>> acquire_image(i64 timeout);
+  std::optional<std::tuple<i32, vk::Image, vk::Extent2D>>
+  acquire_image(i64 timeout);
 
 private:
   friend class VkSwapchainContext;

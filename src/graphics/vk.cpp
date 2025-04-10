@@ -1,6 +1,5 @@
 #include "vkvideo/graphics/vk.hpp"
 
-#include "averror.h"
 #include "vkfw/vkfw.hpp"
 #include "vkvideo/graphics/vma.hpp"
 #include "vkvideo/medias/wrapper.hpp"
@@ -328,9 +327,7 @@ VkContext::VkContext(vkfw::Window &window) {
     allocator.unmap_memory(static_cast<VmaAllocation>(mem->user));
   };
 
-  int err = av_hwdevice_ctx_init(hwdevice_ctx.get());
-  if (err < 0)
-    av::throws_if(av::OptionalErrorCode::null(), err, av::ffmpeg_category());
+  ffmpeg::av_call(av_hwdevice_ctx_init(hwdevice_ctx.get()));
 
   allocator = VkMemAllocator::create(instance, physical_device, device);
   qf_graphics = vk_device_ctx.queue_family_index;

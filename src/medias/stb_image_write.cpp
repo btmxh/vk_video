@@ -1,9 +1,5 @@
 #include "vkvideo/medias/stb_image_write.hpp"
 
-#include "codec.h"
-#include "codeccontext.h"
-#include "formatcontext.h"
-#include "videorescaler.h"
 #include "vkvideo/medias/ffmpeg.hpp"
 
 #include <libavcodec/avcodec.h>

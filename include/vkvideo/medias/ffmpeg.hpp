@@ -396,4 +396,8 @@ public:
   }
 };
 
+inline i64 rescale_to_ns(i64 time, Rational time_base) {
+  return av_rescale(time, (i64)1e9 * time_base.num, time_base.den);
+}
+
 } // namespace vkvideo::ffmpeg

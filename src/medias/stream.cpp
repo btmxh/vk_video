@@ -3,7 +3,7 @@
 #include "vkvideo/context/context.hpp"
 #include "vkvideo/medias/ffmpeg.hpp"
 
-#include <demux.h>
+#include <webp/demux.h>
 
 #include <fstream>
 #include <utility>
@@ -36,12 +36,7 @@ FFmpegStream::FFmpegStream(std::string_view path, Context &ctx,
 
 std::pair<ffmpeg::Frame, bool> FFmpegStream::next_frame(ffmpeg::Frame &&frame) {
   auto rescale_pts = [&](i64 &pts) {
-    auto timebase = demuxer->streams[stream_idx]->time_base;
-    // frame->pts = av_rescale_q(frame->pts, timebase,
-    //                           (AVRational){1, 1e9});
-    i64 b = timebase.num * (i64)1e9;
-    i64 c = timebase.den;
-    pts = av_rescale(pts, b, c);
+    pts = ffmpeg::rescale_to_ns(pts, demuxer->streams[stream_idx]->time_base);
   };
 
   while (true) {
@@ -82,11 +77,17 @@ bool FFmpegStream::seek(i64 pos) {
   return true;
 }
 
-std::optional<i32> FFmpegStream::estimate_num_frames() {
+std::optional<i32> FFmpegStream::get_num_frames() {
   i32 nb_frames = demuxer->streams[stream_idx]->nb_frames;
   if (nb_frames == 0)
     return std::nullopt;
   return nb_frames;
+}
+
+std::optional<i64> FFmpegStream::get_duration() {
+  // TODO: this is not entirely accurate
+  return ffmpeg::rescale_to_ns(demuxer->streams[stream_idx]->duration,
+                               demuxer->streams[stream_idx]->time_base);
 }
 
 static std::vector<u8> read_file_bytes(std::string_view path) {
@@ -116,6 +117,11 @@ bool AnimWebPStream::seek(i64 time) {
 std::pair<ffmpeg::Frame, bool>
 AnimWebPStream::next_frame(ffmpeg::Frame &&frame) {
   if (!WebPAnimDecoderHasMoreFrames(decoder.get())) {
+    // if we decoded all frame, we know for sure that the total duration
+    // is the last PTS value
+    if (duration.has_value())
+      assert(duration.value() == last_pts);
+    duration = last_pts;
     return {std::move(frame), false};
   }
 
@@ -142,8 +148,8 @@ AnimWebPStream::next_frame(ffmpeg::Frame &&frame) {
   return {std::move(frame), true};
 }
 
-std::optional<i32> AnimWebPStream::estimate_num_frames() {
-  return info.frame_count;
-}
+std::optional<i32> AnimWebPStream::get_num_frames() { return info.frame_count; }
+
+std::optional<i64> AnimWebPStream::get_duration() { return duration; }
 
 } // namespace vkvideo

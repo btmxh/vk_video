@@ -57,11 +57,13 @@ void VkSwapchainContext::recreate(i32 width, i32 height) {
     recreate_callback(swapchain_images);
 }
 
-std::optional<std::pair<i32, vk::Image>> FrameInfo::acquire_image(i64 timeout) {
+std::optional<std::tuple<i32, vk::Image, vk::Extent2D>>
+FrameInfo::acquire_image(i64 timeout) {
   try {
     auto [result, image_idx] =
         ctx->swapchain.acquireNextImage(timeout, image_acq_sem, nullptr);
-    return std::pair{image_idx, ctx->swapchain_images[image_idx]};
+    return std::tuple{image_idx, ctx->swapchain_images[image_idx],
+                      ctx->swapchain_extent};
   } catch (vk::OutOfDateKHRError) {
     ctx->recreate();
     return acquire_image(timeout);
@@ -73,8 +75,6 @@ FrameInfo VkSwapchainContext::begin_frame() {
   frame.frame_idx = frame_idx;
   frame.fif_idx = frame_idx % fif_count;
   frame.image_acq_sem = image_acq_sems[frame.fif_idx];
-  frame.width = swapchain_extent.width;
-  frame.height = swapchain_extent.height;
 
   return frame;
 }

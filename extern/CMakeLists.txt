@@ -4,9 +4,5 @@ target_include_directories(vkfw INTERFACE "${PROJECT_SOURCE_DIR}/extern/vkfw/inc
 target_link_libraries(vkfw INTERFACE glfw)
 target_compile_definitions(vkfw INTERFACE VKFW_NO_STRUCT_CONSTRUCTORS)
 
-set(AV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(AV_ENABLE_SHARED  OFF CACHE BOOL "" FORCE)
-add_subdirectory(avcpp)
-
 add_subdirectory(vk-bootstrap)
 add_subdirectory(mcpp-unique-any)
