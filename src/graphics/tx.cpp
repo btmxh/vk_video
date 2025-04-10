@@ -68,8 +68,6 @@ std::pair<std::shared_ptr<TimelineSemaphore>, u64> TempCommandPools::end(
       .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
   };
 
-  std::cout << wait_sems.size() << std::endl;
-
   it->second.submit2(vk::SubmitInfo2{}
                          .setCommandBufferInfos(cmd_buf_si)
                          .setWaitSemaphoreInfos(wait_sems)

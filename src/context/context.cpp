@@ -4,14 +4,21 @@
 #include "vkvideo/medias/stream.hpp"
 #include "vkvideo/medias/video.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <utility>
 
 namespace vkvideo {
 vkfw::InitHints ContextArgs::init_hint() const {
+  auto force_x11 = []() {
+    auto env = std::getenv("VKVIDEO_FORCE_X11");
+    return env && std::strcmp(env, "1") == 0;
+  }();
   return vkfw::InitHints{
-      .platform = mode == DisplayMode::Preview ? vkfw::Platform::eX11
-                                               : vkfw::Platform::eNull,
+      .platform =
+          mode == DisplayMode::Preview
+              ? (force_x11 ? vkfw::Platform::eX11 : vkfw::Platform::eAny)
+              : vkfw::Platform::eNull,
   };
 }
 
