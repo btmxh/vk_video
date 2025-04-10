@@ -6,8 +6,8 @@
 #include <libavutil/frame.h>
 
 namespace vkvideo {
-void write_img_grayscale(std::string_view filename, i32 width, i32 height,
-                         const void *data) {
+void write_img(std::string_view filename, i32 width, i32 height,
+               std::span<u8> data, ffmpeg::PixelFormat data_format) {
   auto format = ffmpeg::guess_output_format({}, filename);
   if (!format)
     throw std::runtime_error("Unable to guess output format from filename");
@@ -23,8 +23,8 @@ void write_img_grayscale(std::string_view filename, i32 width, i32 height,
       nullptr, codec, AV_CODEC_CONFIG_PIX_FORMAT, 0,
       const_cast<const void **>(reinterpret_cast<void **>(&pix_fmts)),
       nullptr));
-  auto pix_fmt = avcodec_find_best_pix_fmt_of_list(pix_fmts, AV_PIX_FMT_GRAY8,
-                                                   false, nullptr);
+  auto pix_fmt =
+      avcodec_find_best_pix_fmt_of_list(pix_fmts, data_format, false, nullptr);
 
   auto encoder = ffmpeg::CodecContext::create(codec);
   encoder->width = width;
@@ -40,12 +40,12 @@ void write_img_grayscale(std::string_view filename, i32 width, i32 height,
 
   muxer.begin();
 
-  ffmpeg::Frame frame;
-  frame->format = AV_PIX_FMT_GRAY8;
+  auto frame = ffmpeg::Frame::create();
+  frame->format = data_format;
   frame->width = width;
   frame->height = height;
   ffmpeg::av_call(av_frame_get_buffer(frame.get(), 1));
-  std::memcpy(frame->data[0], data, width * height);
+  std::memcpy(frame->data[0], data.data(), data.size_bytes());
 
   auto rescaled = ffmpeg::Frame::create();
   rescaled->format = pix_fmt;
