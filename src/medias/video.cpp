@@ -125,6 +125,8 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
 
   frames.clear();
 
+  auto linesize =
+      static_cast<std::size_t>(rescaled_frames.front()->linesize[0]);
   auto num_comps = av_pix_fmt_desc_get(format)->nb_components;
 
   // creating vulkan image...
@@ -150,9 +152,10 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
       {
           .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
       });
+  i32 frame_size = linesize * height;
   auto buffer = vk.get_vma_allocator().createBuffer(
       {
-          .size = width * height * rescaled_frames.size() * num_comps,
+          .size = frame_size * rescaled_frames.size(),
           .usage = vk::BufferUsageFlagBits::eTransferSrc,
       },
       {
@@ -161,7 +164,6 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
       });
 
   u8 *data = static_cast<u8 *>(buffer.get_alloc_info().pMappedData);
-  i32 frame_size = width * height * num_comps;
   for (const auto &frame : rescaled_frames) {
     std::memcpy(data, frame->data[0], frame_size);
     data += frame_size;
@@ -192,6 +194,7 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
       buffer.get_buffer(), image.get_image(),
       vk::ImageLayout::eTransferDstOptimal,
       vk::BufferImageCopy{
+          .bufferRowLength = static_cast<u32>(linesize / num_comps),
           .imageSubresource =
               vk::ImageSubresourceLayers{
                   .aspectMask = vk::ImageAspectFlagBits::eColor,
