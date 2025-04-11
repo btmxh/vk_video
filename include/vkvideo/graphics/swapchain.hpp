@@ -19,7 +19,8 @@ struct FrameInfo {
   i32 frame_idx;
   i32 fif_idx; // frame_idx % num_frames_in_flight, provided for convenience
 
-  std::optional<std::tuple<i32, vk::Image, vk::Extent2D>>
+  std::optional<
+      std::tuple<i32, vk::Image, vk::ImageView, vk::Extent2D, vk::Format>>
   acquire_image(i64 timeout);
 
 private:
@@ -60,7 +61,9 @@ private:
   std::vector<vk::Image> swapchain_images;
   std::function<void(std::span<vk::Image>)> recreate_callback;
   vk::Extent2D swapchain_extent;
+  vk::Format swapchain_format;
 
+  std::vector<vkr::ImageView> swapchain_image_views;
   std::vector<vkr::Semaphore> image_acq_sems;
 
   i32 frame_idx = 0;

@@ -2,7 +2,6 @@
 
 #include "vkfw/vkfw.hpp"
 #include "vkvideo/graphics/vma.hpp"
-#include "vkvideo/medias/wrapper.hpp"
 
 #include <vkvideo/core/utility.hpp>
 #include <vkvideo/version.h>
@@ -12,8 +11,6 @@
 #include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan_structs.hpp>
 
-#include <chrono>
-#include <optional>
 #include <stdexcept>
 
 extern "C" {
@@ -44,10 +41,10 @@ inline VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(
   auto ms = vkb::to_string_message_severity(messageSeverity);
   auto mt = vkb::to_string_message_type(messageType);
   if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
-    printf("[%s: %s] %s - %s\n", ms, mt, pCallbackData->pMessageIdName,
-           pCallbackData->pMessage);
+    printf("\033[31m[%s: %s]\033[0m %s - %s\n", ms, mt,
+           pCallbackData->pMessageIdName, pCallbackData->pMessage);
   } else {
-    printf("[%s: %s] %s\n", ms, mt, pCallbackData->pMessage);
+    printf("\033[31m[%s: %s]\033[0m %s\n", ms, mt, pCallbackData->pMessage);
   }
 
   return VK_FALSE; // Applications must return false here (Except Validation, if
@@ -75,8 +72,9 @@ VkContext::VkContext(vkfw::Window &window) {
       .setVulkanMemoryModelDeviceScope(true)
       .setBufferDeviceAddress(true)
       .setUniformAndStorageBuffer8BitAccess(true);
-  feature_chain.get<vk::PhysicalDeviceVulkan13Features>().setSynchronization2(
-      true);
+  feature_chain.get<vk::PhysicalDeviceVulkan13Features>()
+      .setSynchronization2(true)
+      .setDynamicRendering(true);
   feature_chain.get<vk::PhysicalDeviceVideoMaintenance1FeaturesKHR>()
       .setVideoMaintenance1(true);
   auto b_inst =
@@ -253,6 +251,9 @@ VkContext::VkContext(vkfw::Window &window) {
   });
   set_qf(vk_device_ctx.queue_family_decode_index,
          vk_device_ctx.nb_decode_queues, it - qf_props.begin());
+
+#ifdef VKVIDEO_USE_FFMPEG_CUSTOM_ALLOC
+  // https://github.com/btmxh/FFmpeg/tree/n7.1-vma
   vk_device_ctx.memory_alloc_cb = [](AVHWDeviceContext *ctx,
                                      VkMemoryRequirements *req,
                                      VkMemoryPropertyFlagBits req_flags,
@@ -326,6 +327,7 @@ VkContext::VkContext(vkfw::Window &window) {
     auto &allocator = static_cast<VkContext *>(ctx->user_opaque)->allocator;
     allocator.unmap_memory(static_cast<VmaAllocation>(mem->user));
   };
+#endif
 
   ffmpeg::av_call(av_hwdevice_ctx_init(hwdevice_ctx.get()));
 

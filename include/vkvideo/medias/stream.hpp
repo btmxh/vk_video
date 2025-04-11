@@ -45,6 +45,9 @@ public:
   std::optional<i32> get_num_frames() override;
   std::optional<i64> get_duration() override;
 
+  ffmpeg::InputFormatContext &get_demuxer() { return demuxer; }
+  ffmpeg::CodecContext &get_decoder() { return decoder; }
+
 private:
   ffmpeg::InputFormatContext demuxer;
   ffmpeg::CodecContext decoder;
@@ -52,6 +55,8 @@ private:
 
   i32 stream_idx;
   bool reach_eof_packet = false;
+
+  bool read_packet();
 };
 
 #ifdef VKVIDEO_HAVE_WEBP

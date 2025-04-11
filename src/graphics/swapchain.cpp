@@ -33,6 +33,10 @@ void VkSwapchainContext::recreate(i32 width, i32 height) {
           .set_old_swapchain(*swapchain)
           .set_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+          .set_desired_format(vk::SurfaceFormatKHR{
+              .format = vk::Format::eB8G8R8A8Unorm,
+              .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
+          })
           .build();
 
   if (!r_swapchain.has_value()) {
@@ -40,6 +44,7 @@ void VkSwapchainContext::recreate(i32 width, i32 height) {
   }
 
   swapchain_extent = r_swapchain.value().extent;
+  swapchain_format = static_cast<vk::Format>(r_swapchain.value().image_format);
   swapchain = vkr::SwapchainKHR{*device, r_swapchain.value().swapchain};
 
   auto r_images = r_swapchain.value().get_images();
@@ -53,17 +58,30 @@ void VkSwapchainContext::recreate(i32 width, i32 height) {
     swapchain_images.emplace_back(image);
   }
 
+  auto r_image_views = r_swapchain->get_image_views();
+  if (!r_image_views.has_value()) {
+    throw std::runtime_error{r_image_views.error().message()};
+  }
+
+  swapchain_image_views.clear();
+  swapchain_image_views.reserve(r_image_views.value().size());
+  for (const auto &view : r_image_views.value()) {
+    swapchain_image_views.emplace_back(*device, view);
+  }
+
   if (recreate_callback)
     recreate_callback(swapchain_images);
 }
 
-std::optional<std::tuple<i32, vk::Image, vk::Extent2D>>
+std::optional<
+    std::tuple<i32, vk::Image, vk::ImageView, vk::Extent2D, vk::Format>>
 FrameInfo::acquire_image(i64 timeout) {
   try {
     auto [result, image_idx] =
         ctx->swapchain.acquireNextImage(timeout, image_acq_sem, nullptr);
     return std::tuple{image_idx, ctx->swapchain_images[image_idx],
-                      ctx->swapchain_extent};
+                      *ctx->swapchain_image_views[image_idx],
+                      ctx->swapchain_extent, ctx->swapchain_format};
   } catch (vk::OutOfDateKHRError) {
     ctx->recreate();
     return acquire_image(timeout);

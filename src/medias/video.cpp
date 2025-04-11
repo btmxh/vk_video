@@ -3,7 +3,9 @@
 #include "vkvideo/context/context.hpp"
 #include "vkvideo/graphics/vma.hpp"
 #include "vkvideo/medias/ffmpeg.hpp"
+#include "vkvideo/medias/stb_image_write.hpp"
 
+#include <libavutil/hwcontext.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_enums.hpp>
 
@@ -16,21 +18,57 @@ extern "C" {
 }
 
 namespace vkvideo {
+void VideoStream::seek(i64 time) {
+  Video::seek(time);
+  av_frame_unref(frame.get());
+  stream->seek(time);
+}
+
 std::optional<VideoFrame> VideoStream::get_frame_monotonic(i64 time) {
   Video::get_frame_monotonic(time);
   assert(frame);
   while (true) {
     if (frame->pts + frame->duration > time) {
-      auto out_frame = ffmpeg::Frame::create();
-      out_frame.ref_to(frame);
-
       // TODO: add support for non-HWaccel formats
-      assert(out_frame->format == AV_PIX_FMT_VULKAN);
-      AVVkFrame &vk_frame = *reinterpret_cast<AVVkFrame *>(out_frame->data[0]);
+      if (frame->format == AV_PIX_FMT_VULKAN) {
+        AVVkFrame &vk_frame = *reinterpret_cast<AVVkFrame *>(frame->data[0]);
 
-      VideoFrame vid_frame;
-      // TODO: ...
-      return vid_frame;
+        // TODO: maybe use a better way to fetch the formats?
+        auto ffmpeg_st = dynamic_cast<FFmpegStream *>(stream.get());
+        auto &decoder = ffmpeg_st->get_decoder();
+        assert(decoder->hw_frames_ctx);
+        auto hw_frames_ctx =
+            reinterpret_cast<AVHWFramesContext *>(decoder->hw_frames_ctx->data);
+        auto vk_frames_ctx =
+            static_cast<AVVulkanFramesContext *>(hw_frames_ctx->hwctx);
+
+        VideoFrame vid_frame;
+        vid_frame.data = std::make_shared<VideoFrameData>();
+        vid_frame.data->width = frame->width;
+        vid_frame.data->height = frame->height;
+        vid_frame.data->padded_width = hw_frames_ctx->width;
+        vid_frame.data->padded_height = hw_frames_ctx->height;
+        // auto buf_frame = ffmpeg::Frame::create();
+        // buf_frame.ref_to(frame);
+        // vid_frame.data->buf = std::move(buf_frame);
+        for (i32 i = 0; i < std::size(vk_frame.img) && vk_frame.img[i]; ++i) {
+          auto &plane = vid_frame.data->planes.emplace_back();
+          plane.image = vk_frame.img[i];
+          plane.format = static_cast<vk::Format>(vk_frames_ctx->format[i]);
+          plane.layout = static_cast<vk::ImageLayout>(vk_frame.layout[i]);
+          plane.stage = vk::PipelineStageFlagBits2::eBottomOfPipe;
+          plane.access = static_cast<vk::AccessFlags2>(vk_frame.access[i]);
+          plane.semaphore = vk_frame.sem[i];
+          plane.semaphore_value = vk_frame.sem_value[i];
+          plane.queue_family_idx = vk_frame.queue_family[i];
+          plane.num_layers = vk_frames_ctx->nb_layers;
+        }
+
+        vid_frame.frame_format = hw_frames_ctx->sw_format;
+        return vid_frame;
+      } else {
+        throw std::logic_error{"Not implemented."};
+      }
     }
 
     bool got_frame;
@@ -67,11 +105,10 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
   // as YUV blitting is explicitly disallowed in Vulkan spec
 
   std::map<AVPixelFormat, std::vector<vk::Format>> supported_formats{
-      {AV_PIX_FMT_GRAY8, {vk::Format::eR8Srgb, vk::Format::eR8Unorm}},
-      {AV_PIX_FMT_GRAY8A, {vk::Format::eR8G8Srgb, vk::Format::eR8G8Unorm}},
-      {AV_PIX_FMT_RGB24, {vk::Format::eR8G8B8Srgb, vk::Format::eR8G8B8Unorm}},
-      {AV_PIX_FMT_RGBA,
-       {vk::Format::eR8G8B8A8Srgb, vk::Format::eR8G8B8A8Unorm}},
+      {AV_PIX_FMT_GRAY8, {vk::Format::eR8Unorm}},
+      {AV_PIX_FMT_GRAY8A, {vk::Format::eR8G8Unorm}},
+      {AV_PIX_FMT_RGB24, {vk::Format::eR8G8B8Unorm}},
+      {AV_PIX_FMT_RGBA, {vk::Format::eR8G8B8A8Unorm}},
   };
   for (auto &[pix_fmt, vk_formats] : supported_formats) {
     std::erase_if(vk_formats, [&](vk::Format format) {
@@ -107,9 +144,12 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
   }
   formats.push_back(AV_PIX_FMT_NONE);
 
-  auto format = avcodec_find_best_pix_fmt_of_list(
+  format = avcodec_find_best_pix_fmt_of_list(
       formats.data(), static_cast<AVPixelFormat>(frames.front()->format),
       has_alpha, nullptr);
+  if (format == AV_PIX_FMT_NONE) {
+    throw std::runtime_error{"No supported format"};
+  }
 
   std::vector<ffmpeg::Frame> rescaled_frames;
   ffmpeg::VideoRescaler rescaler{};
@@ -211,6 +251,8 @@ VideoVRAM::VideoVRAM(Stream &stream, Context &ctx) {
   frame_data = std::make_shared<VideoFrameData>();
   frame_data->width = width;
   frame_data->height = height;
+  frame_data->padded_width = width;
+  frame_data->padded_height = height;
   auto &image_plane = frame_data->planes.emplace_back();
   image_plane.image = image.get_image();
   image_plane.format = supported_formats[format].front();
@@ -240,6 +282,7 @@ std::optional<VideoFrame> VideoVRAM::get_frame_monotonic(i64 time) {
   // output last_frame_idx-th frame
   return VideoFrame{
       .data = frame_data,
+      .frame_format = format,
       .frame_index = last_frame_idx,
   };
 }

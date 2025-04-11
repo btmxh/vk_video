@@ -65,7 +65,7 @@ std::pair<std::shared_ptr<TimelineSemaphore>, u64> TempCommandPools::end(
   vk::SemaphoreSubmitInfo sem_si{
       .semaphore = *op.sem,
       .value = static_cast<u64>(sem_value),
-      .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
+      .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
   };
 
   it->second.submit2(vk::SubmitInfo2{}

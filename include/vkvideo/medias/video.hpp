@@ -51,11 +51,7 @@ public:
   ~VideoStream() = default;
 
   std::optional<VideoFrame> get_frame_monotonic(i64 time) override;
-
-  void seek(i64 time) override {
-    Video::seek(time);
-    stream->seek(time);
-  }
+  void seek(i64 time) override;
 
   std::optional<i32> get_num_frames() override {
     return stream->get_num_frames();
@@ -95,5 +91,6 @@ private:
   // (wlog assuming timestamps[-1] = 0)
   std::vector<i64> timestamps;
   i32 last_frame_idx = 0;
+  ffmpeg::PixelFormat format;
 };
 } // namespace vkvideo

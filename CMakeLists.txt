@@ -29,6 +29,41 @@ if(CCACHE_PROGRAM)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
 endif()
 
+# source: https://thatonegamedev.com/cpp/cmake/how-to-compile-shaders-with-cmake/
+function(add_shaders TARGET_NAME)
+  set(SHADER_SOURCE_FILES ${ARGN})
+  list(LENGTH SHADER_SOURCE_FILES SHADER_COUNT)
+
+  if(SHADER_COUNT EQUAL 0)
+    message(FATAL_ERROR "No shader source files provided")
+  endif()
+
+  set(SHADER_COMMANDS)
+  set(SHADER_PRODUCTS)
+
+  foreach(SHADER_SOURCE_FILE ${SHADER_SOURCE_FILES})
+    cmake_path(ABSOLUTE_PATH SHADER_SOURCE_FILE NORMALIZE)
+    cmake_path(GET SHADER_SOURCE_FILE FILENAME SHADER_NAME)
+
+    list(APPEND SHADER_COMMANDS COMMAND)
+    list(APPEND SHADER_COMMANDS Vulkan::glslc)
+    list(APPEND SHADER_COMMANDS "${SHADER_SOURCE_FILE}")
+    list(APPEND SHADER_COMMANDS "-o")
+    list(APPEND SHADER_COMMANDS "${CMAKE_CURRENT_BINARY_DIR}/${SHADER_NAME}.spv")
+
+    list(APPEND SHADER_PRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/${SHADER_NAME}.spv")
+  endforeach()
+
+
+  add_custom_target(
+    ${TARGET_NAME} ALL
+    ${SHADER_COMMANDS}
+    COMMENT "Compiling shaders ${TARGET_NAME}"
+    SOURCES ${SHADER_SOURCE_FILES}
+    BYPRODUCTS ${SHADER_PRODUCTS}
+  )
+endfunction()
+
 add_subdirectory(src)
 add_subdirectory(app)
 

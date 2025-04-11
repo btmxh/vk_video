@@ -54,15 +54,18 @@ static bool is_webp_path(std::string_view path) {
          header[10] == 0x42 && header[11] == 0x50;
 }
 
-static std::unique_ptr<Stream>
-open_video_stream(Context &c, std::string_view path, DecoderType type) {
+static std::unique_ptr<Stream> open_video_stream(Context &c,
+                                                 std::string_view path,
+                                                 DecoderType type,
+                                                 HWAccel hwaccel) {
   if (type == DecoderType::eAuto) {
     type = is_webp_path(path) ? DecoderType::eLibWebP : DecoderType::eFFmpeg;
   }
 
   switch (type) {
   case DecoderType::eFFmpeg:
-    return std::make_unique<FFmpegStream>(path, c);
+    return std::make_unique<FFmpegStream>(path, c, ffmpeg::MediaType::Video,
+                                          hwaccel);
   case DecoderType::eLibWebP:
     return std::make_unique<AnimWebPStream>(path);
   default:;
@@ -73,13 +76,13 @@ open_video_stream(Context &c, std::string_view path, DecoderType type) {
 
 std::unique_ptr<Video> Context::open_video(std::string_view path,
                                            const VideoArgs &args) {
-  auto stream = open_video_stream(*this, path, args.type);
+  auto stream = open_video_stream(*this, path, args.type, args.hwaccel);
   auto mode = args.mode;
   if (mode == DecodeMode::eAuto) {
     mode = DecodeMode::eStream;
 
     auto num_frames_est = stream->get_num_frames();
-    if (num_frames_est.has_value() && num_frames_est.value() < 64) {
+    if (num_frames_est.has_value() && num_frames_est.value() <= 256) {
       mode = DecodeMode::eReadAll;
     }
   }

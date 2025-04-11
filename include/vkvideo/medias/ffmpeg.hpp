@@ -122,6 +122,8 @@ public:
   }
 
   static Packet create() { return Packet{av_packet_alloc()}; }
+
+  void unref() const { av_packet_unref(get()); }
 };
 
 class Frame : public std::unique_ptr<AVFrame, detail::FrameDeleter> {
@@ -296,8 +298,11 @@ public:
   }
 
   // DECODE
-  void send_packet(const Packet &packet) {
-    av_call(avcodec_send_packet(get(), packet.get()));
+  bool send_packet(const Packet &packet) {
+    int err = avcodec_send_packet(get(), packet.get());
+    if (err != 0 && err != AVERROR_EOF)
+      av_call(err);
+    return err == 0;
   }
 
   std::pair<Frame, RecvError> recv_frame(Frame &&frame = nullptr) {

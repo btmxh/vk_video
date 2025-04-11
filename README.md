@@ -5,7 +5,7 @@ A sample demo using FFmpeg and Vulkan video coding APIs to encode and decode vid
 Current status:
 - [x] Decoding
 - [ ] Encoding
-- [ ] Presenting
+- [ ] Presenting (in progress): currently `VideoVRAM` and hardware-accelerated `VideoStream` is working.
 
 ## Build
 

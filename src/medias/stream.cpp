@@ -21,7 +21,7 @@ FFmpegStream::FFmpegStream(std::string_view path, Context &ctx,
 
   decoder = ffmpeg::CodecContext::create(codec);
   decoder.copy_params_from(demuxer->streams[stream_idx]->codecpar);
-  if (hwaccel == HWAccel::eOn) {
+  if (hwaccel == HWAccel::eOn || hwaccel == HWAccel::eAuto) {
     if (stream_type == ffmpeg::MediaType::Video) {
       ctx.enable_hardware_acceleration(decoder);
     } else {
@@ -42,38 +42,41 @@ std::pair<ffmpeg::Frame, bool> FFmpegStream::next_frame(ffmpeg::Frame &&frame) {
   while (true) {
     ffmpeg::RecvError err;
     std::tie(frame, err) = decoder.recv_frame(std::move(frame));
-    switch (err) {
-    case ffmpeg::RecvError::eSuccess:
+    if (err == ffmpeg::RecvError::eSuccess) {
       rescale_pts(frame->pts);
       rescale_pts(frame->duration);
       return {std::move(frame), true};
-    case ffmpeg::RecvError::eAgain:
-      break;
-    case ffmpeg::RecvError::eEof:
-      return {std::move(frame), false};
     }
 
-    while (true) {
-      std::tie(current_packet, err) =
-          demuxer.read_packet(std::move(current_packet));
-      if (err != ffmpeg::RecvError::eSuccess ||
-          current_packet->stream_index == stream_idx) {
-        break;
-      }
-    }
-    assert(err != ffmpeg::RecvError::eAgain);
-    if (err == ffmpeg::RecvError::eEof &&
-        std::exchange(reach_eof_packet, true)) {
+    if (read_packet())
+      decoder.send_packet(current_packet);
+    else
       return {std::move(frame), false};
-    }
+  }
+}
 
-    decoder.send_packet(current_packet);
+bool FFmpegStream::read_packet() {
+  ffmpeg::RecvError err;
+  std::tie(current_packet, err) =
+      demuxer.read_packet(std::move(current_packet));
+  switch (err) {
+  case ffmpeg::RecvError::eSuccess:
+    if (current_packet->stream_index != stream_idx)
+      return read_packet(); // or goto first line for better perf
+
+    return true;
+  case ffmpeg::RecvError::eAgain:
+    throw std::logic_error{"should not reach here"};
+  case ffmpeg::RecvError::eEof:
+    return !std::exchange(reach_eof_packet, true);
   }
 }
 
 bool FFmpegStream::seek(i64 pos) {
   pos /= 1000000000 / AV_TIME_BASE;
   ffmpeg::av_call(av_seek_frame(demuxer.get(), -1, pos, AVSEEK_FLAG_BACKWARD));
+  avcodec_flush_buffers(decoder.get());
+  reach_eof_packet = false;
   return true;
 }
 
