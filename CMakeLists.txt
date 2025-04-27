@@ -1,4 +1,7 @@
-cmake_minimum_required(VERSION 3.19...4.0)
+cmake_minimum_required(VERSION 3.31 FATAL_ERROR)
+
+set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "a9e1cf81-9932-4810-974b-6eccaf14e457")
+set(CMAKE_CXX_MODULE_STD 1)
 
 project(VkVideo VERSION 0.1.0
                 DESCRIPTION "Vulkan Video decoding/encoding sample"

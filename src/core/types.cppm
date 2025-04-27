@@ -1,8 +1,8 @@
-#pragma once
+export module vkvideo.core:types;
 
-#include <cstdint>
+import std;
 
-namespace vkvideo {
+export namespace vkvideo {
 // fixed-width integer types
 using u8 = std::uint8_t;
 using u32 = std::uint32_t;

@@ -1,11 +1,19 @@
-#include "vkvideo/medias/stb_image_write.hpp"
+module;
 
-#include "vkvideo/medias/ffmpeg.hpp"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb/stb_image_write.h>
 
+extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavutil/frame.h>
+#include <libavformat/avformat.h>
+}
 
-namespace vkvideo {
+export module vkvideo.medias:stbi;
+
+import std;
+import :ffmpeg;
+
+export namespace vkvideo::medias::stbi {
 void write_img(std::string_view filename, i32 width, i32 height,
                std::span<u8> data, ffmpeg::PixelFormat data_format) {
   auto format = ffmpeg::guess_output_format({}, filename);
@@ -18,7 +26,7 @@ void write_img(std::string_view filename, i32 width, i32 height,
   if (!codec)
     throw std::runtime_error("Unable to find codec");
 
-  AVPixelFormat *pix_fmts;
+  ffmpeg::PixelFormat *pix_fmts;
   ffmpeg::av_call(avcodec_get_supported_config(
       nullptr, codec, AV_CODEC_CONFIG_PIX_FORMAT, 0,
       const_cast<const void **>(reinterpret_cast<void **>(&pix_fmts)),
@@ -73,4 +81,4 @@ void write_img(std::string_view filename, i32 width, i32 height,
 
   muxer.end();
 }
-} // namespace vkvideo
+} // namespace vkvideo::medias::stbi
