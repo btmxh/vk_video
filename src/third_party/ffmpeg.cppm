@@ -4,16 +4,17 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 
-export module vkvideo.medias:ffmpeg;
+export module vkvideo.third_party:ffmpeg;
 
 import std;
 import vkvideo.core;
 
-export namespace vkvideo::medias::ffmpeg {
+export namespace vkvideo::tp::ffmpeg {
 
 inline int av_call(int err) {
   if (err < 0) {
@@ -103,6 +104,12 @@ public:
   static BufferRef alloc(std::size_t size) {
     return BufferRef{av_buffer_alloc(size)};
   }
+
+  std::span<u8> data() { return std::span<u8>{get()->data, get()->size}; }
+
+  std::span<const u8> data() const {
+    return std::span<const u8>{get()->data, get()->size};
+  }
 };
 
 class Packet : public std::unique_ptr<AVPacket, detail::PacketDeleter> {
@@ -136,6 +143,7 @@ public:
   static Frame create() { return Frame{av_frame_alloc()}; }
 
   void ref_to(const Frame &other) { av_frame_ref(get(), other.get()); }
+  void unref() { av_frame_unref(get()); }
 };
 
 template <class Deleter>
@@ -341,6 +349,8 @@ public:
 
     return std::pair{std::move(packet), result};
   };
+
+  void flush_buffers() { avcodec_flush_buffers(get()); }
 };
 
 using Rational = AVRational;
@@ -401,4 +411,15 @@ inline i64 rescale_to_ns(i64 time, Rational time_base) {
   return av_rescale(time, (i64)1e9 * time_base.num, time_base.den);
 }
 
-} // namespace vkvideo::medias::ffmpeg
+using PixelFormatDescriptor = AVPixFmtDescriptor;
+
+enum class PixelFormatFlagBits : int {
+  eRgb = AV_PIX_FMT_FLAG_RGB,
+  eHasAlpha = AV_PIX_FMT_FLAG_ALPHA,
+};
+
+const PixelFormatDescriptor *get_pix_fmt_desc(PixelFormat format) {
+  return av_pix_fmt_desc_get(format);
+}
+
+} // namespace vkvideo::tp::ffmpeg

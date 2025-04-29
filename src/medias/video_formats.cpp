@@ -1,70 +1,17 @@
-#pragma once
-
-#include "mcpp/unique_any.hpp"
-#include "vkvideo/core/types.hpp"
-#include "vkvideo/medias/ffmpeg.hpp"
+module;
 
 #include <vulkan/vulkan_core.h>
 
-#include <memory>
-
-namespace vkvideo {
-struct VideoFramePlane {
-  vk::Image image;
-  vk::Format format;
-  vk::ImageLayout layout;
-  vk::PipelineStageFlags2 stage;
-  vk::AccessFlags2 access;
-  vk::Semaphore semaphore;
-  u64 semaphore_value;
-  u32 queue_family_idx;
-  i32 num_layers;
-
-  vk::ImageSubresourceRange get_subresource_range() const {
-    // TODO: make this work with YUV
-    return {
-        // .aspectMask = vk::ImageAspectFlagBits::eColor,
-        .aspectMask = vk::ImageAspectFlagBits::eColor,
-        .levelCount = 1,
-        .layerCount = static_cast<u32>(num_layers),
-    };
-  }
-
-  vk::ImageSubresourceLayers
-  get_subresource_layer(std::optional<i32> frame_idx) const {
-    return {
-        .aspectMask = vk::ImageAspectFlagBits::eColor,
-        .mipLevel = 0,
-        .baseArrayLayer = static_cast<u32>(frame_idx.value_or(0)),
-        .layerCount = 1,
-    };
-  }
-};
-
-struct VideoFrameData {
-  std::vector<VideoFramePlane> planes;
-  // the resource that owns the data in `planes`
-  // (the images and the semaphores)
-  mcpp::unique_any buf;
-  i32 width, height;
-  i32 padded_width, padded_height;
-
-  void add_buf(mcpp::unique_any buf) {
-    auto moved_buf = std::move(this->buf);
-    this->buf = std::make_pair(std::move(moved_buf), std::move(buf));
-  }
-};
-
-struct VideoFrame {
-  // static constexpr std::size_t max_num_images = AV_NUM_DATA_POINTERS;
-  std::shared_ptr<VideoFrameData> data;
-  ffmpeg::PixelFormat frame_format;
-  std::optional<i32> frame_index; // available for texture arrays
-};
+inline constexpr auto ASPECT_2PLANE =
+    VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT;
+inline constexpr auto ASPECT_3PLANE = VK_IMAGE_ASPECT_PLANE_0_BIT |
+                                      VK_IMAGE_ASPECT_PLANE_1_BIT |
+                                      VK_IMAGE_ASPECT_PLANE_2_BIT;
+extern "C" {
+#include <libavutil/pixfmt.h>
+}
 
 // clang-format off
-inline constexpr auto ASPECT_2PLANE = VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT;
-inline constexpr auto ASPECT_3PLANE = VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT | VK_IMAGE_ASPECT_PLANE_2_BIT;
 static const struct FFVkFormatEntry {
     VkFormat vkf;
     enum AVPixelFormat pixfmt;
@@ -140,4 +87,43 @@ static const struct FFVkFormatEntry {
 };
 // clang-format on
 
-} // namespace vkvideo
+module vkvideo.medias;
+
+import vulkan_hpp;
+import std;
+import vkvideo.core;
+import vkvideo.third_party;
+
+namespace vkvideo::medias {
+
+HWVideoFormat convert_struct(const FFVkFormatEntry &entry) {
+  HWVideoFormat format = {
+      .format = static_cast<vk::Format>(entry.vkf),
+      .pixfmt = static_cast<tp::ffmpeg::PixelFormat>(entry.pixfmt),
+      .aspect = static_cast<vk::ImageAspectFlags>(entry.aspect),
+      .vk_planes = entry.vk_planes,
+      .nb_images = entry.nb_images,
+  };
+
+  format.fallbacks.reserve(entry.nb_images_fallback);
+  for (int i = 0; i < entry.nb_images_fallback; ++i) {
+    format.fallbacks.push_back(static_cast<vk::Format>(entry.fallback[i]));
+  }
+
+  return format;
+}
+
+const HWVideoFormat *get_hw_video_format(vk::Format format) {
+  static std::unordered_map<vk::Format, HWVideoFormat> formats = []() {
+    std::unordered_map<vk::Format, HWVideoFormat> formats;
+    for (const auto &entry : vk_formats_list) {
+      auto format = convert_struct(entry);
+      formats.emplace(format.format, format);
+    }
+    return formats;
+  }();
+
+  auto it = formats.find(format);
+  return it == formats.end() ? nullptr : &it->second;
+}
+}; // namespace vkvideo::medias
