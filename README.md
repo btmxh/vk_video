@@ -4,8 +4,8 @@ A sample demo using FFmpeg and Vulkan video coding APIs to encode and decode vid
 
 Current status:
 - [x] Decoding
+- [x] Presenting: currently seeking on hardware-accelerated videos sometimes crashes
 - [ ] Encoding
-- [ ] Presenting (in progress): currently `VideoVRAM` and hardware-accelerated `VideoStream` is working.
 
 ## Build
 
@@ -32,6 +32,6 @@ Finally run the application against a video file:
 build/app/vkvideo_app ~/Videos/untitled.mp4
 ```
 
-Currently, the program will just dump the first 10 frames (in grayscale) from the video and exit.
+Currently, the program will play the given video over and over again.
 
 

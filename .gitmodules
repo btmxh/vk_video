@@ -1,9 +1,6 @@
 [submodule "extern/vkfw"]
 	path = extern/vkfw
-	url = https://github.com/Cvelth/vkfw
-[submodule "extern/vk-bootstrap"]
-	path = extern/vk-bootstrap
-	url = https://github.com/charles-lunarg/vk-bootstrap
-[submodule "extern/mcpp-unique-any"]
-	path = extern/mcpp-unique-any
-	url = https://github.com/mika-fischer/mcpp-unique-any
+	url = https://github.com/btmxh/vkfw
+[submodule "extern/VulkanMemoryAllocator-Hpp"]
+	path = extern/VulkanMemoryAllocator-Hpp
+	url = https://github.com/YaaZ/VulkanMemoryAllocator-Hpp
