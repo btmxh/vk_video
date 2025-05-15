@@ -298,7 +298,7 @@ int main(int argc, char *argv[]) {
               static_cast<u32>(vk.get_queues().get_qf_graphics()),
       }};
 
-  auto fif_cnt = vk.get_swapchain_ctx().num_fifs();
+  auto fif_cnt = vk.get_swapchain_ctx()->num_fifs();
   vkr::CommandBuffers cmd_bufs{
       vk.get_device(), vk::CommandBufferAllocateInfo{
                            .commandPool = *pool,
@@ -308,9 +308,11 @@ int main(int argc, char *argv[]) {
   std::vector<TimelineSemaphore> cmd_buf_sems;
   std::vector<std::vector<UniqueAny>> cmd_buf_dependencies;
   std::vector<vkr::Semaphore> present_sems;
+  std::vector<u64> present_sem_values;
   cmd_buf_sems.reserve(fif_cnt);
   cmd_buf_dependencies.resize(fif_cnt);
   present_sems.reserve(fif_cnt);
+  present_sem_values.resize(fif_cnt);
   for (i32 i = 0; i < fif_cnt; ++i) {
     cmd_buf_sems.emplace_back(vk.get_device(), i);
     present_sems.emplace_back(vk.get_device(), vk::SemaphoreCreateInfo{});
@@ -362,7 +364,7 @@ int main(int argc, char *argv[]) {
 
     auto elapsed_from_start = now - start_time;
 
-    auto &present = context.get_vulkan().get_swapchain_ctx();
+    auto &present = *context.get_vulkan().get_swapchain_ctx();
     auto frame = present.begin_frame();
 
     cmd_buf_sems[frame.fif_idx].wait(frame.frame_idx,
@@ -532,14 +534,14 @@ int main(int argc, char *argv[]) {
           auto &plane = planes.front();
           wait_sem_info.push_back(plane->wait_sem_info());
         }
-        vk::SemaphoreSubmitInfo sig_sem_info[2]{
+        vk::SemaphoreSubmitInfo sig_sem_info[]{
             {
                 .semaphore = cmd_buf_sems[frame.fif_idx],
                 .value = static_cast<u64>(frame.frame_idx + fif_cnt),
                 .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
             },
             {
-                .semaphore = present_sems[frame.fif_idx],
+                .semaphore = present_sems[image_idx],
                 .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
             },
         };
@@ -559,7 +561,7 @@ int main(int argc, char *argv[]) {
         cmd_buf_dependencies[frame.fif_idx].push_back(std::move(pipeline));
       }
 
-      vk::Semaphore wait_sem = *present_sems[frame.fif_idx];
+      vk::Semaphore wait_sem = *present_sems[image_idx];
       present.end_frame(vk.get_queues(), image_idx, wait_sem);
     }
   }

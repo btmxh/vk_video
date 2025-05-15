@@ -79,22 +79,58 @@ public:
            num_frames.value();
   }
 
+  tp::ffmpeg::InputFormatContext &get_demuxer() { return demuxer; }
+  i32 get_stream_index() const { return stream_index; }
+  tp::ffmpeg::Codec get_codec() const { return codec; }
+
+  void seek(i64 pos) {
+    tp::ffmpeg::av_call(av_seek_frame(demuxer.get(), -1,
+                                      pos * AV_TIME_BASE / 1000000000,
+                                      AVSEEK_FLAG_BACKWARD));
+    reach_eof_packet = false;
+  }
+
+  std::pair<tp::ffmpeg::Packet, tp::ffmpeg::RecvError>
+  read_packet(tp::ffmpeg::Packet &&packet = nullptr) {
+    if (!packet)
+      packet = tp::ffmpeg::Packet::create();
+
+    tp::ffmpeg::RecvError err;
+    while (true) {
+      std::tie(packet, err) = demuxer.read_packet(std::move(packet));
+      switch (err) {
+      case tp::ffmpeg::RecvError::eSuccess:
+        if (packet->stream_index == stream_index)
+          return std::make_pair(std::move(packet), err);
+        break;
+      case tp::ffmpeg::RecvError::eAgain:
+        throw std::logic_error{"should not reach here"};
+      case tp::ffmpeg::RecvError::eEof:
+        bool eof = std::exchange(reach_eof_packet, true);
+        return std::make_pair(std::move(packet),
+                              eof ? tp::ffmpeg::RecvError::eEof
+                                  : tp::ffmpeg::RecvError::eSuccess);
+      }
+    }
+  }
+
 private:
   tp::ffmpeg::InputFormatContext demuxer;
   i32 stream_index;
   tp::ffmpeg::Codec codec;
-
-  friend class FFmpegStream;
+  bool reach_eof_packet = false;
 };
 
 class FFmpegStream : public Stream {
 public:
-  FFmpegStream(RawFFmpegStream &&raw, const tp::ffmpeg::BufferRef &hwaccel_ctx,
+  FFmpegStream(RawFFmpegStream raw, const tp::ffmpeg::BufferRef &hwaccel_ctx,
                tp::ffmpeg::MediaType stream_type = tp::ffmpeg::MediaType::Video,
                HWAccel hwaccel = HWAccel::eAuto)
-      : demuxer{std::move(raw.demuxer)}, stream_idx{raw.stream_index} {
-    decoder = tp::ffmpeg::CodecContext::create(raw.codec);
-    decoder.copy_params_from(demuxer->streams[stream_idx]->codecpar);
+      : raw{std::move(raw)} {
+    decoder = tp::ffmpeg::CodecContext::create(raw.get_codec());
+    decoder.copy_params_from(this->raw.get_demuxer()
+                                 ->streams[this->raw.get_stream_index()]
+                                 ->codecpar);
     if (hwaccel == HWAccel::eOn || hwaccel == HWAccel::eAuto) {
       if (stream_type == tp::ffmpeg::MediaType::Video) {
         decoder->hw_device_ctx = av_buffer_ref(hwaccel_ctx.get());
@@ -107,6 +143,7 @@ public:
                      "video streams\n";
       }
     }
+
     decoder.open();
 
     current_packet = tp::ffmpeg::Packet::create();
@@ -117,27 +154,10 @@ public:
   std::pair<tp::ffmpeg::Frame, bool>
   next_frame(tp::ffmpeg::Frame &&frame = {}) override {
     auto rescale_pts = [&](i64 &pts) {
-      pts = tp::ffmpeg::rescale_to_ns(pts,
-                                      demuxer->streams[stream_idx]->time_base);
+      pts = tp::ffmpeg::rescale_to_ns(pts, get_stream().time_base);
     };
 
-    auto read_packet = [&]() {
-      tp::ffmpeg::RecvError err;
-      while (true) {
-        std::tie(current_packet, err) =
-            demuxer.read_packet(std::move(current_packet));
-        switch (err) {
-        case tp::ffmpeg::RecvError::eSuccess:
-          if (current_packet->stream_index == stream_idx)
-            return true;
-          break;
-        case tp::ffmpeg::RecvError::eAgain:
-          throw std::logic_error{"should not reach here"};
-        case tp::ffmpeg::RecvError::eEof:
-          return !std::exchange(reach_eof_packet, true);
-        }
-      }
-    };
+    auto read_packet = [&]() {};
 
     while (true) {
       tp::ffmpeg::RecvError err;
@@ -148,24 +168,24 @@ public:
         return {std::move(frame), true};
       }
 
-      if (read_packet())
-        decoder.send_packet(current_packet);
-      else
+      std::tie(current_packet, err) =
+          raw.read_packet(std::move(current_packet));
+      if (err != tp::ffmpeg::RecvError::eSuccess) {
         return {std::move(frame), false};
+      }
+
+      decoder.send_packet(current_packet);
     }
   }
 
   bool seek(i64 pos) override {
-    pos /= 1000000000 / AV_TIME_BASE;
-    tp::ffmpeg::av_call(
-        av_seek_frame(demuxer.get(), -1, pos, AVSEEK_FLAG_BACKWARD));
     decoder.flush_buffers();
-    reach_eof_packet = false;
+    raw.seek(pos);
     return true;
   }
 
   std::optional<i32> get_num_frames() override {
-    i32 nb_frames = demuxer->streams[stream_idx]->nb_frames;
+    i32 nb_frames = get_stream().nb_frames;
     if (nb_frames == 0)
       return std::nullopt;
     return nb_frames;
@@ -173,22 +193,21 @@ public:
 
   std::optional<i64> get_duration() override {
     // TODO: this is not entirely accurate
-    return tp::ffmpeg::rescale_to_ns(demuxer->streams[stream_idx]->duration,
-                                     demuxer->streams[stream_idx]->time_base);
+    return tp::ffmpeg::rescale_to_ns(get_stream().duration,
+                                     get_stream().time_base);
   }
 
-  tp::ffmpeg::InputFormatContext &get_demuxer() { return demuxer; }
+  tp::ffmpeg::InputFormatContext &get_demuxer() { return raw.get_demuxer(); }
   tp::ffmpeg::CodecContext &get_decoder() { return decoder; }
 
 private:
-  tp::ffmpeg::InputFormatContext demuxer;
+  RawFFmpegStream raw;
   tp::ffmpeg::CodecContext decoder;
   tp::ffmpeg::Packet current_packet;
 
-  i32 stream_idx;
-  bool reach_eof_packet = false;
-
-  bool read_packet();
+  AVStream &get_stream() {
+    return *raw.get_demuxer()->streams[raw.get_stream_index()];
+  }
 };
 
 #ifdef VKVIDEO_HAVE_WEBP

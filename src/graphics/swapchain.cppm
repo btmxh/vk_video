@@ -30,19 +30,16 @@ private:
 
 class VkSwapchainContext {
 public:
-  void init(vk::raii::PhysicalDevice &physical_device, vk::raii::Device &device,
-            vkfw::Window window, vk::SurfaceKHR surface, i32 fif_count) {
-    this->physical_device = &physical_device;
-    this->device = &device;
-    this->window = window;
-    this->surface = surface;
-    this->fif_count = fif_count;
-
-    recreate();
-
+  VkSwapchainContext(vk::raii::PhysicalDevice &physical_device,
+                     vk::raii::Device &device, vkfw::Window window,
+                     vk::SurfaceKHR surface, i32 fif_count)
+      : physical_device{&physical_device}, device{&device}, window{window},
+        surface{surface}, fif_count{fif_count} {
     for (i32 i = 0; i < fif_count; ++i) {
       image_acq_sems.emplace_back(device, vk::SemaphoreCreateInfo{});
     }
+
+    recreate();
   }
 
   i32 num_images() const { return swapchain_images.size(); }

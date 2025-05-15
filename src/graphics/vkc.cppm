@@ -203,25 +203,27 @@ public:
     using QFPChain = vk::StructureChain<vk::QueueFamilyProperties2,
                                         vk::QueueFamilyVideoPropertiesKHR>;
     auto qf_props = physical_device.getQueueFamilyProperties2<QFPChain>();
-    qf_graphics = std::find_if(qf_props.begin(), qf_props.end(),
-                               [](const QFPChain &qf) {
-                                 return qf.get<vk::QueueFamilyProperties2>()
-                                            .queueFamilyProperties.queueFlags &
-                                        vk::QueueFlagBits::eGraphics;
-                               }) -
-                  qf_props.begin();
+    auto qf_graphics =
+        std::find_if(qf_props.begin(), qf_props.end(),
+                     [](const QFPChain &qf) {
+                       return qf.get<vk::QueueFamilyProperties2>()
+                                  .queueFamilyProperties.queueFlags &
+                              vk::QueueFlagBits::eGraphics;
+                     }) -
+        qf_props.begin();
     if (qf_graphics == qf_props.size())
       throw std::runtime_error{"Graphics queue not found"};
 
-    qf_compute = std::find_if(qf_props.begin(), qf_props.end(),
-                              [&](const QFPChain &qf) {
-                                auto idx = &qf - &qf_props[0];
-                                return idx != qf_graphics &&
-                                       (qf.get<vk::QueueFamilyProperties2>()
-                                            .queueFamilyProperties.queueFlags &
-                                        vk::QueueFlagBits::eCompute);
-                              }) -
-                 qf_props.begin();
+    auto qf_compute =
+        std::find_if(qf_props.begin(), qf_props.end(),
+                     [&](const QFPChain &qf) {
+                       auto idx = &qf - &qf_props[0];
+                       return idx != qf_graphics &&
+                              (qf.get<vk::QueueFamilyProperties2>()
+                                   .queueFamilyProperties.queueFlags &
+                               vk::QueueFlagBits::eCompute);
+                     }) -
+        qf_props.begin();
     // From the Vulkan spec
     // (https://registry.khronos.org/vulkan/specs/latest/man/html/VkQueueFlagBits.html)
     //
@@ -245,16 +247,16 @@ public:
     // VK_QUEUE_TRANSFER_BIT capability separately for that queue family is
     // optional.
 
-    qf_transfer = std::find_if(qf_props.begin(), qf_props.end(),
-                               [&](const QFPChain &qf) {
-                                 auto idx = &qf - &qf_props[0];
-                                 return idx != qf_graphics &&
-                                        idx != qf_compute &&
-                                        (qf.get<vk::QueueFamilyProperties2>()
-                                             .queueFamilyProperties.queueFlags &
-                                         vk::QueueFlagBits::eTransfer);
-                               }) -
-                  qf_props.begin();
+    auto qf_transfer =
+        std::find_if(qf_props.begin(), qf_props.end(),
+                     [&](const QFPChain &qf) {
+                       auto idx = &qf - &qf_props[0];
+                       return idx != qf_graphics && idx != qf_compute &&
+                              (qf.get<vk::QueueFamilyProperties2>()
+                                   .queueFamilyProperties.queueFlags &
+                               vk::QueueFlagBits::eTransfer);
+                     }) -
+        qf_props.begin();
     if (qf_transfer == qf_props.size())
       qf_transfer = qf_graphics;
 
@@ -463,13 +465,16 @@ public:
     queues.init(device, qf_graphics, qf_compute, qf_transfer,
                 std::move(video_qf_indices));
 
-    swapchain_ctx.init(physical_device, device, window, surface, 3);
-    window.callbacks()->on_framebuffer_resize =
-        [&](vkfw::Window w, size_t width, size_t height) {
-          if (width > 0 && height > 0)
-            swapchain_ctx.recreate(static_cast<i32>(width),
-                                   static_cast<i32>(height));
-        };
+    if (!headless) {
+      swapchain_ctx.emplace(physical_device, device, window, surface, 3);
+
+      window.callbacks()->on_framebuffer_resize =
+          [&](vkfw::Window w, size_t width, size_t height) {
+            if (width > 0 && height > 0 && swapchain_ctx.has_value())
+              swapchain_ctx->recreate(static_cast<i32>(width),
+                                      static_cast<i32>(height));
+          };
+    }
 
     tx_pool.init(device, queues);
   }
@@ -489,7 +494,9 @@ public:
 
   const tp::ffmpeg::BufferRef &get_hwaccel_ctx() const { return hwdevice_ctx; }
   QueueManager &get_queues() { return queues; }
-  VkSwapchainContext &get_swapchain_ctx() { return swapchain_ctx; }
+  VkSwapchainContext *get_swapchain_ctx() {
+    return swapchain_ctx.has_value() ? &*swapchain_ctx : nullptr;
+  }
   TempCommandPools &get_temp_pools() { return tx_pool; }
 
 private:
@@ -510,9 +517,7 @@ private:
 
   QueueManager queues;
   TempCommandPools tx_pool;
-  VkSwapchainContext swapchain_ctx;
-
-  i32 qf_graphics, qf_compute, qf_transfer;
+  std::optional<VkSwapchainContext> swapchain_ctx;
 };
 
 } // namespace vkvideo::graphics
