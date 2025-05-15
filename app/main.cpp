@@ -244,7 +244,7 @@ struct VideoPipeline {
   }
 
   vk::raii::ImageView create_image_view(const vk::raii::Device &device,
-                                        const VideoFramePlane &plane) {
+                                        const LockedVideoFramePlane &plane) {
     vk::SamplerYcbcrConversionInfo conv_info{.conversion = *yuv_sampler};
 
     return vk::raii::ImageView{
@@ -318,11 +318,9 @@ int main(int argc, char *argv[]) {
     present_sems.emplace_back(vk.get_device(), vk::SemaphoreCreateInfo{});
   }
 
-  auto handle_transition = [&](VideoFrame &video_frame) {
-    auto planes = video_frame.data->get_planes();
-    // TODO: support multi-plane formats
-    assert(planes.size() == 1);
-    auto &plane = *planes.front();
+  // TODO: support multi-plane formats
+  auto handle_transition = [&](VideoFrame &video_frame,
+                               LockedVideoFramePlane &plane) {
     auto barrier = plane.image_barrier(
         vk::PipelineStageFlagBits2::eFragmentShader,
         vk::AccessFlagBits2::eShaderSampledRead,
@@ -375,7 +373,7 @@ int main(int argc, char *argv[]) {
       cmd_buf_sems[image_idx].wait(cmd_buf_sem_values[image_idx],
                                    std::numeric_limits<i64>::max());
       // once work is done, we can free all dependencies
-      cmd_buf_dependencies[frame.fif_idx].clear();
+      cmd_buf_dependencies[image_idx].clear();
       // record cmdbuf
       auto &cmd_buf = cmd_bufs[image_idx];
       cmd_buf.begin(vk::CommandBufferBeginInfo{
@@ -409,9 +407,18 @@ int main(int argc, char *argv[]) {
           .pixel_format = video_frame.has_value() ? video_frame->frame_format
                                                   : AV_PIX_FMT_NONE,
       };
+      auto planes = video_frame
+                        .transform([](VideoFrame &frame) {
+                          return frame.data->get_planes();
+                        })
+                        .value_or(std::vector<VideoFramePlane *>{});
+      std::vector<std::unique_ptr<LockedVideoFramePlane>> locked_planes;
+      for (auto plane : planes) {
+        locked_planes.emplace_back(plane->lock());
+      }
+
       if (video_frame.has_value()) {
-        auto planes = video_frame->data->get_planes();
-        for (auto plane : planes)
+        for (const auto &plane : locked_planes)
           vid_info.plane_formats.push_back(plane->get_format());
       }
 
@@ -423,14 +430,14 @@ int main(int argc, char *argv[]) {
       }
 
       auto pipeline = it->second;
-      vk::raii::ImageView view = nullptr;
-      if (video_frame.has_value()) {
-        auto planes = video_frame->data->get_planes();
-        view = pipeline->create_image_view(vk.get_device(), *planes.front());
+      std::vector<vk::raii::ImageView> views;
+      for (const auto &plane : locked_planes) {
+        views.emplace_back(
+            pipeline->create_image_view(vk.get_device(), *plane));
       }
 
       if (video_frame.has_value())
-        handle_transition(video_frame.value());
+        handle_transition(video_frame.value(), *locked_planes.front());
 
       // here we use the huge ass graphics pipeline
       vk::RenderingAttachmentInfo color_attachment{
@@ -465,7 +472,7 @@ int main(int argc, char *argv[]) {
                                  *pipeline->descriptor_sets[frame.fif_idx], {});
       vk::DescriptorImageInfo desc_sampler{
           .sampler = pipeline->sampler,
-          .imageView = view,
+          .imageView = views.front(),
           .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
       };
       vk.get_device().updateDescriptorSets(
@@ -529,15 +536,10 @@ int main(int argc, char *argv[]) {
                 .stageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
             },
         };
-        if (video_frame.has_value()) {
-          auto planes = video_frame->data->get_planes();
-          auto &plane = planes.front();
-          wait_sem_info.push_back(plane->wait_sem_info());
-        }
-        vk::SemaphoreSubmitInfo sig_sem_info[]{
+        std::vector<vk::SemaphoreSubmitInfo> sig_sem_info{
             {
-                .semaphore = cmd_buf_sems[frame.fif_idx],
-                .value = ++cmd_buf_sem_values[frame.fif_idx],
+                .semaphore = cmd_buf_sems[image_idx],
+                .value = ++cmd_buf_sem_values[image_idx],
                 .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
             },
             {
@@ -545,6 +547,13 @@ int main(int argc, char *argv[]) {
                 .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
             },
         };
+        if (video_frame.has_value()) {
+          auto &plane = locked_planes.front();
+          wait_sem_info.push_back(plane->wait_sem_info());
+          auto new_sem_value =
+              sig_sem_info.emplace_back(plane->signal_sem_info()).value;
+          plane->set_semaphore_value(new_sem_value);
+        }
 
         {
           auto [q_lock, graphics_queue] = vk.get_queues().get_graphics_queue();
@@ -553,8 +562,10 @@ int main(int argc, char *argv[]) {
                                      .setWaitSemaphoreInfos(wait_sem_info)
                                      .setSignalSemaphoreInfos(sig_sem_info));
         }
+
+        locked_planes.clear();
         cmd_buf_dependencies[frame.fif_idx].push_back(std::move(video_frame));
-        cmd_buf_dependencies[frame.fif_idx].push_back(std::move(view));
+        cmd_buf_dependencies[frame.fif_idx].push_back(std::move(views));
         // for now the pipeline is cached indefinitely, but if we use some
         // strategy like LRU caching, we must ensure that the pipeline live at
         // least as long as command buffer execution

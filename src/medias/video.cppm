@@ -75,10 +75,10 @@ public:
           std::vector<std::unique_ptr<VideoFramePlane>> planes;
           for (i32 i = 0; i < std::size(vk_frame.img) && vk_frame.img[i]; ++i) {
             auto plane = std::make_unique<FFmpegBackedVideoFramePlane>();
+            plane->hw_frames_ctx = hw_frames_ctx;
+            plane->vk_frames_ctx = vk_frames_ctx;
             plane->frame = &vk_frame;
             plane->plane_index = i;
-            plane->format = static_cast<vk::Format>(vk_frames_ctx->format[i]);
-            plane->num_layers = vk_frames_ctx->nb_layers;
             planes.emplace_back(std::move(plane));
           }
 
@@ -176,10 +176,6 @@ public:
     last_frame_idx =
         std::lower_bound(timestamps.begin(), timestamps.end(), time) -
         timestamps.begin();
-  }
-
-  void wait_for_load(graphics::VkContext &vk, i64 timeout) override {
-    std::ignore = frame_data->wait_semaphores(vk.get_device(), timeout);
   }
 
   std::optional<i32> get_num_frames() override { return timestamps.size(); }
