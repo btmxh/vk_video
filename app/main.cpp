@@ -308,11 +308,11 @@ int main(int argc, char *argv[]) {
   std::vector<TimelineSemaphore> cmd_buf_sems;
   std::vector<std::vector<UniqueAny>> cmd_buf_dependencies;
   std::vector<vkr::Semaphore> present_sems;
-  std::vector<u64> present_sem_values;
+  std::vector<u64> cmd_buf_sem_values;
   cmd_buf_sems.reserve(fif_cnt);
   cmd_buf_dependencies.resize(fif_cnt);
   present_sems.reserve(fif_cnt);
-  present_sem_values.resize(fif_cnt);
+  cmd_buf_sem_values.resize(fif_cnt);
   for (i32 i = 0; i < fif_cnt; ++i) {
     cmd_buf_sems.emplace_back(vk.get_device(), i);
     present_sems.emplace_back(vk.get_device(), vk::SemaphoreCreateInfo{});
@@ -367,17 +367,17 @@ int main(int argc, char *argv[]) {
     auto &present = *context.get_vulkan().get_swapchain_ctx();
     auto frame = present.begin_frame();
 
-    cmd_buf_sems[frame.fif_idx].wait(frame.frame_idx,
-                                     std::numeric_limits<i64>::max());
-    // once work is done, we can free all dependencies
-    cmd_buf_dependencies[frame.fif_idx].clear();
-
     if (auto image_opt = frame.acquire_image(std::numeric_limits<u64>::max());
         image_opt.has_value()) {
       auto [image_idx, image, image_view, image_size, image_format] =
           image_opt.value();
+
+      cmd_buf_sems[image_idx].wait(cmd_buf_sem_values[image_idx],
+                                   std::numeric_limits<i64>::max());
+      // once work is done, we can free all dependencies
+      cmd_buf_dependencies[frame.fif_idx].clear();
       // record cmdbuf
-      auto &cmd_buf = cmd_bufs[frame.fif_idx];
+      auto &cmd_buf = cmd_bufs[image_idx];
       cmd_buf.begin(vk::CommandBufferBeginInfo{
           .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
@@ -537,7 +537,7 @@ int main(int argc, char *argv[]) {
         vk::SemaphoreSubmitInfo sig_sem_info[]{
             {
                 .semaphore = cmd_buf_sems[frame.fif_idx],
-                .value = static_cast<u64>(frame.frame_idx + fif_cnt),
+                .value = ++cmd_buf_sem_values[frame.fif_idx],
                 .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
             },
             {
