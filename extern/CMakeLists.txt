@@ -1,6 +1,7 @@
 set(VKFW_NO_STRUCT_CONSTRUCTORS ON CACHE BOOL "" FORCE)
 # disable import vulkan_hpp; to avoid collisions with our Vulkan-Hpp library
 set(VKFW_BUILD_WITH_VULKAN_MODULE OFF CACHE BOOL "" FORCE)
+set(VKFW_BUILD_CXX_MODULE ON CACHE BOOL "" FORCE)
 add_subdirectory(vkfw)
 
 add_library(vma)
