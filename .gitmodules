@@ -1,6 +1,6 @@
 [submodule "extern/vkfw"]
 	path = extern/vkfw
-	url = https://github.com/btmxh/vkfw
+	url = https://github.com/Cvelth/vkfw
 [submodule "extern/VulkanMemoryAllocator-Hpp"]
 	path = extern/VulkanMemoryAllocator-Hpp
 	url = https://github.com/YaaZ/VulkanMemoryAllocator-Hpp
