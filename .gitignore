@@ -8,3 +8,5 @@ output_*.png
 
 # gf2 debugger project file
 *.gf
+*.gfxr
+*.json
