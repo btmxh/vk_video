@@ -16,7 +16,7 @@ import vkvideo.core;
 
 export namespace vkvideo::medias::stbi {
 void write_img(std::string_view filename, i32 width, i32 height,
-               std::span<u8> data, tp::ffmpeg::PixelFormat data_format) {
+               std::span<const u8> data, tp::ffmpeg::PixelFormat data_format) {
   auto format = tp::ffmpeg::guess_output_format({}, filename);
   if (!format)
     throw std::runtime_error("Unable to guess output format from filename");
