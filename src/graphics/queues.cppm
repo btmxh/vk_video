@@ -91,6 +91,8 @@ public:
             queues.at(calc_key(qf_idx, q_idx))};
   }
 
+  std::span<const u32> get_video_qfs() const { return qf_video; }
+
 private:
   QueueMutexMap mutexes;
   u32 qf_graphics;
