@@ -33,10 +33,10 @@ inline VKAPI_ATTR vk::Bool32 VKAPI_CALL default_debug_callback(
   case 0xfd92477a: /* BestPractices-vkAllocateMemory-small-allocation */
   case 0x618ab1e7: /* VUID-VkImageViewCreateInfo-usage-02275 */
   case 0x30f4ac70: /* VUID-VkImageCreateInfo-pNext-06811 */
-    // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/9680
-    // case 0x77c5e4e8:
-    // case 0x79b1d0c3:
-    // case 0xfd38b0b6:
+  // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/9680
+  case 0x77c5e4e8:
+  case 0x79b1d0c3:
+  case 0xfd38b0b6:
     return false;
   default:
     break;
@@ -49,8 +49,9 @@ inline VKAPI_ATTR vk::Bool32 VKAPI_CALL default_debug_callback(
   }
   // TODO: handle ANSI colors properly
   if (messageType & vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation) {
-    std::println("\033[31m[{}: {}]\033[0m {} - {}", ms, mt,
-                 pCallbackData->pMessageIdName, pCallbackData->pMessage);
+    std::println("\033[31m[{}: {}]\033[0m {} (ID {:x}) - {}", ms, mt,
+                 pCallbackData->pMessageIdName, pCallbackData->messageIdNumber,
+                 pCallbackData->pMessage);
   } else {
     std::println("\033[31m[{}: {}]\033[0m {}", ms, mt, pCallbackData->pMessage);
   }
@@ -117,23 +118,45 @@ public:
     };
 
     auto supported_extensions = context.enumerateInstanceExtensionProperties();
-    if constexpr (enable_validation) {
-      const char *validation_layer_name = "VK_LAYER_KHRONOS_validation";
-      inst_info.setPEnabledLayerNames(validation_layer_name);
 
+    std::vector<std::string> layer_storage;
+    std::vector<const char *> layer_names;
+
+    auto add_layer = [&](auto &&...args) {
+      const auto &name =
+          layer_storage.emplace_back(std::forward<decltype(args)>(args)...);
+      layer_names.push_back(name.c_str());
+    };
+
+    const char *layers = std::getenv("VKVIDEO_ADDITIONAL_LAYERS");
+    if (!layers)
+      layers = "";
+
+    for (const auto &layer :
+         std::views::split(std::string_view{layers}, std::string_view{":"}))
+      add_layer(std::string_view{layer});
+
+    if constexpr (enable_validation) {
+      add_layer("VK_LAYER_KHRONOS_validation");
       inst_exts.push_back(vk::EXTDebugUtilsExtensionName);
-      if (std::find_if(supported_extensions.begin(), supported_extensions.end(),
-                       [](const auto &prop) {
-                         return strcmp(prop.extensionName.data(),
-                                       vk::EXTLayerSettingsExtensionName) == 0;
-                       }) != supported_extensions.end()) {
-        inst_exts.push_back(vk::EXTLayerSettingsExtensionName);
-      }
+      inst_exts.push_back(vk::EXTLayerSettingsExtensionName);
     }
+
+    inst_info.setPEnabledLayerNames(layer_names);
+
+    std::erase_if(inst_exts, [&](const auto &ext_name) {
+      return std::ranges::find_if(supported_extensions, [&](const auto &ext) {
+               return strcmp(ext.extensionName.data(), ext_name) == 0;
+             }) == supported_extensions.end();
+    });
 
     inst_info.setPEnabledExtensionNames(inst_exts);
     instance = vk::raii::Instance{context, inst_info};
-    debug_messenger = vk::raii::DebugUtilsMessengerEXT{instance, debug_msg_ci};
+    if (std::ranges::find(inst_exts,
+                          std::string_view{vk::EXTDebugUtilsExtensionName}) !=
+        inst_exts.end())
+      debug_messenger =
+          vk::raii::DebugUtilsMessengerEXT{instance, debug_msg_ci};
 
     if (!headless) {
       surface = vk::raii::SurfaceKHR{
