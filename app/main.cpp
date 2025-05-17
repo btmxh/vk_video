@@ -305,17 +305,21 @@ int main(int argc, char *argv[]) {
                            .level = vk::CommandBufferLevel::ePrimary,
                            .commandBufferCount = static_cast<u32>(fif_cnt),
                        }};
-  std::vector<TimelineSemaphore> cmd_buf_sems;
+  std::vector<vkr::Semaphore> cmd_buf_start_sems;
+  std::vector<TimelineSemaphore> cmd_buf_end_sems;
   std::vector<std::vector<UniqueAny>> cmd_buf_dependencies;
-  std::vector<vkr::Semaphore> present_sems;
   std::vector<u64> cmd_buf_sem_values;
-  cmd_buf_sems.reserve(fif_cnt);
+  cmd_buf_start_sems.reserve(fif_cnt);
+  cmd_buf_end_sems.reserve(fif_cnt);
   cmd_buf_dependencies.resize(fif_cnt);
-  present_sems.reserve(fif_cnt);
   cmd_buf_sem_values.resize(fif_cnt);
   for (i32 i = 0; i < fif_cnt; ++i) {
-    cmd_buf_sems.emplace_back(vk.get_device(), i);
-    present_sems.emplace_back(vk.get_device(), vk::SemaphoreCreateInfo{});
+    auto name = std::format("cmd_buf_start_sems[{}]", i);
+    auto &start_sem = cmd_buf_start_sems.emplace_back(
+        vk.get_device(), vk::SemaphoreCreateInfo{});
+    vk.set_debug_label(*start_sem, name.c_str());
+    name = std::format("cmd_buf_end_sems[{}]", i);
+    cmd_buf_end_sems.emplace_back(vk.get_device(), 0, name.c_str());
   }
 
   // TODO: support multi-plane formats
@@ -365,17 +369,18 @@ int main(int argc, char *argv[]) {
     auto &present = *context.get_vulkan().get_swapchain_ctx();
     auto frame = present.begin_frame();
 
+    cmd_buf_end_sems[frame.fif_idx].wait(cmd_buf_sem_values[frame.fif_idx],
+                                         std::numeric_limits<i64>::max());
+    // once work is done, we can free all dependencies
+    cmd_buf_dependencies[frame.fif_idx].clear();
+
     if (auto image_opt = frame.acquire_image(std::numeric_limits<u64>::max());
         image_opt.has_value()) {
-      auto [image_idx, image, image_view, image_size, image_format] =
-          image_opt.value();
+      auto [image_idx, image, image_view, image_size, image_format,
+            image_present_sem] = image_opt.value();
 
-      cmd_buf_sems[image_idx].wait(cmd_buf_sem_values[image_idx],
-                                   std::numeric_limits<i64>::max());
-      // once work is done, we can free all dependencies
-      cmd_buf_dependencies[image_idx].clear();
       // record cmdbuf
-      auto &cmd_buf = cmd_bufs[image_idx];
+      auto &cmd_buf = cmd_bufs[frame.fif_idx];
       cmd_buf.begin(vk::CommandBufferBeginInfo{
           .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
@@ -400,7 +405,7 @@ int main(int argc, char *argv[]) {
         cmd_buf.pipelineBarrier2(
             vk::DependencyInfo{}.setImageMemoryBarriers(sc_img_trans));
       }
-      auto video_frame = video->get_frame(elapsed_from_start.count() %
+      auto video_frame = video->get_frame((elapsed_from_start.count() * 2) %
                                           video->get_duration().value_or(1e9));
       VideoPipelineInfo vid_info{
           .color_attachment_format = image_format,
@@ -538,12 +543,12 @@ int main(int argc, char *argv[]) {
         };
         std::vector<vk::SemaphoreSubmitInfo> sig_sem_info{
             {
-                .semaphore = cmd_buf_sems[image_idx],
-                .value = ++cmd_buf_sem_values[image_idx],
+                .semaphore = cmd_buf_end_sems[frame.fif_idx],
+                .value = ++cmd_buf_sem_values[frame.fif_idx],
                 .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
             },
             {
-                .semaphore = present_sems[image_idx],
+                .semaphore = image_present_sem,
                 .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
             },
         };
@@ -572,8 +577,7 @@ int main(int argc, char *argv[]) {
         cmd_buf_dependencies[frame.fif_idx].push_back(std::move(pipeline));
       }
 
-      vk::Semaphore wait_sem = *present_sems[image_idx];
-      present.end_frame(vk.get_queues(), image_idx, wait_sem);
+      present.end_frame(vk.get_queues(), image_idx, {});
     }
   }
 

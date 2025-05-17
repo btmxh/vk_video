@@ -4,11 +4,13 @@ import vkvideo.core;
 import vulkan_hpp;
 import std;
 
-export namespace vkvideo {
+import :vku;
+
+export namespace vkvideo::graphics {
 class TimelineSemaphore : public vk::raii::Semaphore {
 public:
   TimelineSemaphore(std::nullptr_t) : Semaphore(nullptr) {};
-  TimelineSemaphore(vk::raii::Device &device, u64 value)
+  TimelineSemaphore(vk::raii::Device &device, u64 value, const char *name)
       : Semaphore([&] {
           vk::SemaphoreTypeCreateInfo info{
               .semaphoreType = vk::SemaphoreType::eTimeline,
@@ -17,7 +19,9 @@ public:
 
           return vk::raii::Semaphore{device,
                                      vk::SemaphoreCreateInfo{.pNext = &info}};
-        }()) {};
+        }()) {
+    set_debug_label(device, **this, name);
+  };
 
   TimelineSemaphore(vk::raii::Semaphore &&sem) : Semaphore(std::move(sem)) {};
   TimelineSemaphore &operator=(vk::raii::Semaphore &&sem) {
@@ -44,4 +48,4 @@ public:
   u64 get_value() { return this->getDevice().getSemaphoreCounterValue(**this); }
 };
 
-}; // namespace vkvideo
+}; // namespace vkvideo::graphics

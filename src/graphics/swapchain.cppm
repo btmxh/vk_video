@@ -17,8 +17,8 @@ struct FrameInfo {
   i32 frame_idx;
   i32 fif_idx; // frame_idx % num_frames_in_flight, provided for convenience
 
-  std::optional<
-      std::tuple<i32, vk::Image, vk::ImageView, vk::Extent2D, vk::Format>>
+  std::optional<std::tuple<i32, vk::Image, vk::ImageView, vk::Extent2D,
+                           vk::Format, vk::Semaphore>>
   acquire_image(i64 timeout);
 
 private:
@@ -101,6 +101,8 @@ public:
     swapchain_images = swapchain.getImages();
     swapchain_image_views.clear();
     swapchain_image_views.reserve(swapchain_images.size());
+    image_present_sems.clear();
+    image_present_sems.reserve(swapchain_images.size());
     for (const auto &image : swapchain_images) {
       swapchain_image_views.emplace_back(
           *device, vk::ImageViewCreateInfo{
@@ -121,6 +123,8 @@ public:
                                .layerCount = 1,
                            },
                    });
+
+      image_present_sems.emplace_back(*device, vk::SemaphoreCreateInfo{});
     }
 
     if (recreate_callback)
@@ -137,14 +141,18 @@ public:
   }
 
   void end_frame(QueueManager &queues, i32 image_idx,
-                 const vk::ArrayProxyNoTemporaries<vk::Semaphore> &wait_sems) {
-    auto img_idx = static_cast<u32>(image_idx);
+                 const vk::ArrayProxy<vk::Semaphore> &wait_sems) {
     try {
+      auto img_idx = static_cast<u32>(image_idx);
+      std::vector<vk::Semaphore> wait_sems_vec{wait_sems.begin(),
+                                               wait_sems.end()};
+      wait_sems_vec.push_back(*image_present_sems[img_idx]);
       auto [_lock, present_queue] = queues.get_graphics_queue();
-      auto result = present_queue.presentKHR(vk::PresentInfoKHR{}
-                                                 .setWaitSemaphores(wait_sems)
-                                                 .setImageIndices(img_idx)
-                                                 .setSwapchains(*swapchain));
+      auto result =
+          present_queue.presentKHR(vk::PresentInfoKHR{}
+                                       .setWaitSemaphores(wait_sems_vec)
+                                       .setImageIndices(img_idx)
+                                       .setSwapchains(*swapchain));
       if (result == vk::Result::eErrorOutOfDateKHR) {
         recreate();
       }
@@ -168,6 +176,7 @@ private:
 
   std::vector<vk::raii::ImageView> swapchain_image_views;
   std::vector<vk::raii::Semaphore> image_acq_sems;
+  std::vector<vk::raii::Semaphore> image_present_sems;
 
   i32 frame_idx = 0;
   i32 fif_count;
@@ -175,15 +184,18 @@ private:
   friend class FrameInfo;
 };
 
-std::optional<
-    std::tuple<i32, vk::Image, vk::ImageView, vk::Extent2D, vk::Format>>
+std::optional<std::tuple<i32, vk::Image, vk::ImageView, vk::Extent2D,
+                         vk::Format, vk::Semaphore>>
 FrameInfo::acquire_image(i64 timeout) {
   try {
     auto [result, image_idx] =
         ctx->swapchain.acquireNextImage(timeout, image_acq_sem, nullptr);
-    return std::tuple{image_idx, ctx->swapchain_images[image_idx],
+    return std::tuple{image_idx,
+                      ctx->swapchain_images[image_idx],
                       *ctx->swapchain_image_views[image_idx],
-                      ctx->swapchain_extent, ctx->swapchain_format};
+                      ctx->swapchain_extent,
+                      ctx->swapchain_format,
+                      *ctx->image_present_sems[image_idx]};
   } catch (vk::OutOfDateKHRError) {
     ctx->recreate();
     return acquire_image(timeout);

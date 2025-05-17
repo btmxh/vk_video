@@ -12,6 +12,7 @@ target_sources(
             third_party/ffmpeg.cppm
             third_party/webp.cppm
             third_party/mod.cppm
+            graphics/vku.cppm
             graphics/tlsem.cppm
             graphics/queues.cppm
             graphics/tx.cppm

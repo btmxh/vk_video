@@ -21,6 +21,7 @@ import vkvideo.third_party;
 import :queues;
 import :temppools;
 import :swapchain;
+import :vku;
 
 export namespace vkvideo::graphics {
 
@@ -498,6 +499,10 @@ public:
     return swapchain_ctx.has_value() ? &*swapchain_ctx : nullptr;
   }
   TempCommandPools &get_temp_pools() { return tx_pool; }
+
+  void set_debug_label(VulkanHandle handle, const char *name) {
+    ::vkvideo::graphics::set_debug_label(device, handle, name);
+  }
 
 private:
   vk::raii::Context context;

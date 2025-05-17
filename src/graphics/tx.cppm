@@ -47,7 +47,8 @@ public:
       const vk::ArrayProxy<vk::SemaphoreSubmitInfo> &signal_sems = {}) {
     static const u64 sem_value = 1;
     std::scoped_lock _lck{mutex};
-    auto sem = std::make_shared<TimelineSemaphore>(*device, 0);
+    auto name = std::format("task_sem[{}-{}]", qf_idx, 367);
+    auto sem = std::make_shared<TimelineSemaphore>(*device, 0, name.c_str());
 
     auto &op = operations.emplace_back();
     op.sem = sem;
