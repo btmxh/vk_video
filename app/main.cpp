@@ -330,16 +330,30 @@ int main(int argc, char *argv[]) {
   };
 
   auto secs = [&](i64 i) { return i * static_cast<i64>(1e9); };
-  std::vector<i64> frame_times = {secs(1), secs(3), secs(2)};
+  std::vector<i64> frame_times = {};
+  for (i64 i = 0; i < 3; ++i) {
+    frame_times.push_back(i * 1e9);
+  }
+
+  std::sort(frame_times.begin(), frame_times.end(), std::greater<>{});
+
+  std::vector<std::pair<i64, VideoFrame>> frames;
 
   for (const auto frame_time : frame_times) {
     auto frame_opt = video->get_frame(frame_time);
     if (!frame_opt.has_value())
       continue;
-    auto &frame = frame_opt.value();
+    frames.emplace_back(frame_time, frame_opt.value());
+  }
+
+  auto [width, height] = frames.front().second.data->get_extent();
+
+  std::vector<std::tuple<i64, std::shared_ptr<TimelineSemaphore>, u64,
+                         vma::UniqueBuffer, vma::UniqueAllocation>>
+      data;
+  for (auto &[frame_time, frame] : frames) {
     handle_transition(frame);
 
-    auto [width, height] = frame.data->get_extent();
     auto [buffer, buffer_memory] = vk.get_vma_allocator().createBufferUnique(
         vk::BufferCreateInfo{
             .size = static_cast<u32>(width * height),
@@ -376,12 +390,17 @@ int main(int argc, char *argv[]) {
                             1},
         });
     cmd.end();
-    vk.get_temp_pools().end(std::move(cmd), qfi);
+    auto [sem, sem_value] = vk.get_temp_pools().end(std::move(cmd), qfi);
 
-    vk.get_device().waitIdle();
+    data.emplace_back(frame_time, sem, sem_value, std::move(buffer),
+                      std::move(buffer_memory));
+  }
+
+  for (auto &[frame_time, sem, sem_value, buffer, buffer_memory] : data) {
+    sem->wait(sem_value, std::numeric_limits<i64>::max());
 
     auto info = vk.get_vma_allocator().getAllocationInfo(*buffer_memory);
-    auto out_name = std::format("out_{}.png", frame_time);
+    auto out_name = std::format("output_{}.png", frame_time);
     std::span<const u8> pixels{static_cast<const u8 *>(info.pMappedData),
                                static_cast<std::size_t>(width * height)};
     medias::stbi::write_img(out_name, width, height, pixels,
@@ -389,5 +408,6 @@ int main(int argc, char *argv[]) {
   }
 
   context.get_vulkan().get_device().waitIdle();
+
   return 0;
 }
