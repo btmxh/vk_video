@@ -156,29 +156,12 @@ public:
 
     physical_device = std::move(*pd_it);
     device_extensions = std::vector<const char *>{
-        vk::EXTExternalMemoryDmaBufExtensionName,
-        vk::EXTImageDrmFormatModifierExtensionName,
-        vk::KHRExternalMemoryFdExtensionName,
-        vk::KHRExternalSemaphoreFdExtensionName,
-        vk::EXTExternalMemoryHostExtensionName,
-        vk::EXTDebugUtilsExtensionName,
-#ifdef _WIN32
-        vk::KHRExternalMemoryWin32ExtensionName,
-        vk::KHRExternalSemaphoreWin32ExtensionName,
-#endif
-        vk::EXTDescriptorBufferExtensionName,
-        vk::EXTPhysicalDeviceDrmExtensionName,
+        vk::KHRVideoMaintenance1ExtensionName,
         vk::KHRVideoQueueExtensionName,
         vk::KHRVideoDecodeQueueExtensionName,
         vk::KHRVideoDecodeH264ExtensionName,
         vk::KHRVideoDecodeH265ExtensionName,
         vk::KHRVideoDecodeAv1ExtensionName,
-        vk::EXTShaderAtomicFloatExtensionName,
-        vk::KHRCooperativeMatrixExtensionName,
-        vk::NVOpticalFlowExtensionName,
-        vk::EXTShaderObjectExtensionName,
-        vk::KHRPushDescriptorExtensionName,
-        vk::KHRVideoMaintenance1ExtensionName,
         vk::KHRVideoEncodeQueueExtensionName,
         vk::KHRVideoEncodeH264ExtensionName,
         vk::KHRVideoEncodeH265ExtensionName,
