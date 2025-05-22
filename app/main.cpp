@@ -305,6 +305,10 @@ int main(int argc, char *argv[]) {
                            .level = vk::CommandBufferLevel::ePrimary,
                            .commandBufferCount = static_cast<u32>(fif_cnt),
                        }};
+  for (i32 i = 0; i < fif_cnt; ++i) {
+    auto name = std::format("cmd_buf[{}]", i);
+    vk.set_debug_label(*cmd_bufs[i], name.c_str());
+  }
   std::vector<vkr::Semaphore> cmd_buf_start_sems;
   std::vector<TimelineSemaphore> cmd_buf_end_sems;
   std::vector<std::vector<UniqueAny>> cmd_buf_dependencies;
