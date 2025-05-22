@@ -53,7 +53,7 @@ void write_img(std::string_view filename, i32 width, i32 height,
   frame->format = data_format;
   frame->width = width;
   frame->height = height;
-  tp::ffmpeg::av_call(av_frame_get_buffer(frame.get(), 1));
+  frame.get_buffer();
   std::memcpy(frame->data[0], data.data(), data.size_bytes());
 
   auto rescaled = tp::ffmpeg::Frame::create();

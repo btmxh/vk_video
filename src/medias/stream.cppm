@@ -254,7 +254,7 @@ public:
     frame->pts = std::exchange(last_pts, pts);
     frame->format = tp::ffmpeg::PixelFormat::AV_PIX_FMT_RGBA;
 
-    av_frame_get_buffer(frame.get(), 1);
+    frame.get_buffer();
     std::copy(data.begin(), data.end(), frame->data[0]);
     return {std::move(frame), true};
   }

@@ -144,6 +144,7 @@ public:
 
   void ref_to(const Frame &other) { av_frame_ref(get(), other.get()); }
   void unref() { av_frame_unref(get()); }
+  void get_buffer(int align = 1) { av_call(av_frame_get_buffer(get(), align)); }
 };
 
 template <class Deleter>
