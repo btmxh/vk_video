@@ -407,8 +407,7 @@ int main(int argc, char *argv[]) {
                                          std::numeric_limits<i64>::max());
     // once work is done, we can free all dependencies
     cmd_buf_dependencies[frame.fif_idx].clear();
-
-    if (auto image_opt = frame.acquire_image(std::numeric_limits<u64>::max());
+    if (auto image_opt = frame.acquire_image(std::numeric_limits<i64>::max());
         image_opt.has_value()) {
       auto [image_idx, image, image_view, image_size, image_format,
             image_present_sem] = image_opt.value();
