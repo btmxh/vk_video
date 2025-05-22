@@ -411,34 +411,7 @@ int main(int argc, char *argv[]) {
         image_opt.has_value()) {
       auto [image_idx, image, image_view, image_size, image_format,
             image_present_sem] = image_opt.value();
-
-      // record cmdbuf
-      auto &cmd_buf = cmd_bufs[frame.fif_idx];
-      cmd_buf.begin(vk::CommandBufferBeginInfo{
-          .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-      // transition: eUndefined -> eTransferDstOptimal
-      {
-        vk::ImageMemoryBarrier2 sc_img_trans{
-            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-            .srcAccessMask = vk::AccessFlagBits2::eNone,
-            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite |
-                             vk::AccessFlagBits2::eColorAttachmentRead,
-            .oldLayout = vk::ImageLayout::eUndefined,
-            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-            .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-            .image = image,
-            .subresourceRange = {
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .levelCount = 1,
-                .layerCount = 1,
-            }};
-        cmd_buf.pipelineBarrier2(
-            vk::DependencyInfo{}.setImageMemoryBarriers(sc_img_trans));
-      }
-      auto video_frame = video->get_frame((elapsed_from_start.count() * 2) %
+      auto video_frame = video->get_frame(elapsed_from_start.count() %
                                           video->get_duration().value_or(1e9));
       VideoPipelineInfo vid_info{
           .color_attachment_format = image_format,
@@ -477,6 +450,48 @@ int main(int argc, char *argv[]) {
       if (video_frame.has_value())
         handle_transition(video_frame.value(), *locked_planes.front());
 
+      // update desc set
+      vk::DescriptorImageInfo desc_sampler{
+          .sampler = pipeline->sampler,
+          .imageView = views.front(),
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+      };
+      vk.get_device().updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = *pipeline->descriptor_sets[frame.fif_idx],
+              .dstBinding = 0,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &desc_sampler,
+          },
+          {});
+
+      // record cmdbuf
+      auto &cmd_buf = cmd_bufs[frame.fif_idx];
+      cmd_buf.begin(vk::CommandBufferBeginInfo{
+          .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+      // transition: eUndefined -> eTransferDstOptimal
+      {
+        vk::ImageMemoryBarrier2 sc_img_trans{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+            .srcAccessMask = vk::AccessFlagBits2::eNone,
+            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite |
+                             vk::AccessFlagBits2::eColorAttachmentRead,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+            .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .levelCount = 1,
+                .layerCount = 1,
+            }};
+        cmd_buf.pipelineBarrier2(
+            vk::DependencyInfo{}.setImageMemoryBarriers(sc_img_trans));
+      }
       // here we use the huge ass graphics pipeline
       vk::RenderingAttachmentInfo color_attachment{
           .imageView = image_view,
@@ -508,20 +523,6 @@ int main(int argc, char *argv[]) {
       cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                  pipeline->pipeline_layout, 0,
                                  *pipeline->descriptor_sets[frame.fif_idx], {});
-      vk::DescriptorImageInfo desc_sampler{
-          .sampler = pipeline->sampler,
-          .imageView = views.front(),
-          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-      };
-      vk.get_device().updateDescriptorSets(
-          vk::WriteDescriptorSet{
-              .dstSet = *pipeline->descriptor_sets[frame.fif_idx],
-              .dstBinding = 0,
-              .descriptorCount = 1,
-              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-              .pImageInfo = &desc_sampler,
-          },
-          {});
       FrameInfoPushConstants pc_frame{};
       if (video_frame.has_value()) {
         pc_frame.frame_index =
