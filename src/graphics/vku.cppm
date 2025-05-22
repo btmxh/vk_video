@@ -15,6 +15,14 @@ struct VulkanHandle {
 
   VulkanHandle(vk::Semaphore sem)
       : type{vk::ObjectType::eSemaphore}, handle{ptr_to_u64(sem)} {}
+  VulkanHandle(vk::CommandBuffer cmd)
+      : type{vk::ObjectType::eCommandBuffer}, handle{ptr_to_u64(cmd)} {}
+  VulkanHandle(vk::Image img)
+      : type{vk::ObjectType::eImage}, handle{ptr_to_u64(img)} {}
+  VulkanHandle(vk::ImageView view)
+      : type{vk::ObjectType::eImageView}, handle{ptr_to_u64(view)} {}
+  VulkanHandle(vk::Queue queue)
+      : type{vk::ObjectType::eQueue}, handle{ptr_to_u64(queue)} {}
 };
 
 void set_debug_label(vk::raii::Device &device, VulkanHandle handle,

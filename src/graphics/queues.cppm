@@ -3,6 +3,7 @@ export module vkvideo.graphics:queues;
 import std;
 import vkvideo.core;
 import vulkan_hpp;
+import :vku;
 
 export namespace vkvideo::graphics {
 
@@ -48,20 +49,22 @@ public:
     this->qf_video = std::move(qf_video);
 
     queues.clear();
-    auto add_queue = [&](u32 qf_index, u32 q_index = 0) {
+    auto add_queue = [&](std::string queue_name, u32 qf_index,
+                         u32 q_index = 0) {
       auto key = calc_key(qf_index, q_index);
       if (queues.contains(key))
         return;
 
       vk::raii::Queue queue{device, qf_index, q_index};
+      set_debug_label(device, *queue, queue_name.c_str());
       queues.emplace(key, std::move(queue));
     };
 
-    add_queue(qf_graphics);
-    add_queue(qf_compute);
-    add_queue(qf_transfer);
+    add_queue("graphics_queue", qf_graphics);
+    add_queue("compute_queue", qf_compute);
+    add_queue("transfer_queue", qf_transfer);
     for (auto qfv : qf_video)
-      add_queue(qfv);
+      add_queue(std::format("video_queue_{}", qfv), qfv);
   }
 
   QueueMutexMap &get_mutexes() { return mutexes; }

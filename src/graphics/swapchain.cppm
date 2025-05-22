@@ -5,6 +5,7 @@ import std;
 import vkfw;
 import vulkan_hpp;
 import :queues;
+import :vku;
 
 export namespace vkvideo::graphics {
 
@@ -103,8 +104,11 @@ public:
     swapchain_image_views.reserve(swapchain_images.size());
     image_present_sems.clear();
     image_present_sems.reserve(swapchain_images.size());
-    for (const auto &image : swapchain_images) {
-      swapchain_image_views.emplace_back(
+    for (std::size_t i = 0; i < swapchain_images.size(); ++i) {
+      auto image = swapchain_images[i];
+      auto name = std::format("swapchain_images[{}]", i);
+      set_debug_label(*device, image, name.c_str());
+      auto& image_view = swapchain_image_views.emplace_back(
           *device, vk::ImageViewCreateInfo{
                        .image = image,
                        .viewType = vk::ImageViewType::e2D,
@@ -123,6 +127,8 @@ public:
                                .layerCount = 1,
                            },
                    });
+      name = std::format("swapchain_image_views[{}]", i);
+      set_debug_label(*device, *image_view, name.c_str());
 
       image_present_sems.emplace_back(*device, vk::SemaphoreCreateInfo{});
     }
