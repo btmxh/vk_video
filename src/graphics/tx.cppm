@@ -44,7 +44,8 @@ public:
   end(vk::raii::CommandBuffer cmd_buf, i32 qf_idx,
       UniqueAny free_on_finish = {},
       const vk::ArrayProxy<vk::SemaphoreSubmitInfo> &wait_sems = {},
-      const vk::ArrayProxy<vk::SemaphoreSubmitInfo> &signal_sems = {}) {
+      const vk::ArrayProxy<vk::SemaphoreSubmitInfo> &signal_sems = {},
+      vk::PipelineStageFlags2 additional_stage_mask = {}) {
     static const u64 sem_value = 1;
     std::scoped_lock _lck{mutex};
     auto name = std::format("task_sem[{}-{}]", qf_idx, 367);
@@ -65,7 +66,8 @@ public:
     signal_sem_infos.push_back(vk::SemaphoreSubmitInfo{
         .semaphore = *op.sem,
         .value = static_cast<u64>(sem_value),
-        .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
+        .stageMask =
+            vk::PipelineStageFlagBits2::eBottomOfPipe | additional_stage_mask,
     });
 
     auto [queue_lock, queue] = queues->get_queue(qf_idx);
