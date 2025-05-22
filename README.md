@@ -4,7 +4,7 @@ A sample demo using FFmpeg and Vulkan video coding APIs to encode and decode vid
 
 Current status:
 - [x] Decoding
-- [x] Presenting: currently seeking on hardware-accelerated videos sometimes crashes
+- [x] Presenting
 - [ ] Encoding
 
 ## Build
