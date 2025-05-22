@@ -5,6 +5,7 @@ module;
 #endif
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vulkan.h>
@@ -134,8 +135,21 @@ public:
     if (hwaccel == HWAccel::eOn || hwaccel == HWAccel::eAuto) {
       if (stream_type == tp::ffmpeg::MediaType::Video) {
         decoder->hw_device_ctx = av_buffer_ref(hwaccel_ctx.get());
-        decoder->get_format = [](auto...) {
-          return tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN;
+        decoder->opaque = this;
+        decoder->get_format = [](AVCodecContext *c,
+                                 const tp::ffmpeg::PixelFormat *formats) {
+          for (auto p = formats; *p != tp::ffmpeg::PixelFormat::AV_PIX_FMT_NONE;
+               ++p) {
+            if (*p == tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN) {
+              // Vulkan is available, use it
+              return *p;
+            }
+          }
+
+          std::println("Vulkan-accelerated decoding is not available for this "
+                       "format. Falling back to software decoding.");
+          // fallback to sw format on vulkan error
+          return *formats;
         };
         decoder->pix_fmt = tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN;
       } else {
