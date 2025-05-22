@@ -335,21 +335,51 @@ int main(int argc, char *argv[]) {
         vk::ImageLayout::eShaderReadOnlyOptimal,
         static_cast<u32>(vk.get_queues().get_qf_graphics()));
 
-    std::vector<u32> queues{plane.get_queue_family_idx(),
-                            vk.get_queues().get_qf_graphics()};
-    std::erase(queues, vk::QueueFamilyIgnored);
-    queues.erase(std::unique(queues.begin(), queues.end()), queues.end());
-    if (queues.size() == 1 &&
-        plane.get_image_layout() == vk::ImageLayout::eShaderReadOnlyOptimal)
-      return;
-    for (auto qfi : queues) {
-      auto cmd_buf = vk.get_temp_pools().begin(qfi);
+    auto needs_ownership_transfer =
+        plane.get_queue_family_idx() != vk.get_queues().get_qf_graphics() &&
+        plane.get_queue_family_idx() != vk::QueueFamilyIgnored;
+    auto needs_layout_transition =
+        plane.get_image_layout() != vk::ImageLayout::eShaderReadOnlyOptimal;
+    if (needs_ownership_transfer) {
+      // transfer release
+      {
+        auto cmd_buf =
+            vk.get_temp_pools().begin(vk.get_queues().get_qf_transfer());
+        cmd_buf.begin(vk::CommandBufferBeginInfo{
+            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        cmd_buf.pipelineBarrier2(
+            vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+        cmd_buf.end();
+        vk.get_temp_pools().end(std::move(cmd_buf),
+                                vk.get_queues().get_qf_transfer(), {},
+                                plane.wait_sem_info(), plane.signal_sem_info());
+      }
+      plane.set_semaphore_value(plane.get_semaphore_value() + 1);
+      plane.set_stage_flag(vk::PipelineStageFlagBits2::eBottomOfPipe);
+      // graphics acquire
+      {
+        auto cmd_buf =
+            vk.get_temp_pools().begin(vk.get_queues().get_qf_graphics());
+        cmd_buf.begin(vk::CommandBufferBeginInfo{
+            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        cmd_buf.pipelineBarrier2(
+            vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+        cmd_buf.end();
+        vk.get_temp_pools().end(std::move(cmd_buf),
+                                vk.get_queues().get_qf_graphics(), {},
+                                plane.wait_sem_info(), plane.signal_sem_info());
+      }
+      plane.commit_image_barrier(barrier);
+    } else if (needs_layout_transition) {
+      auto cmd_buf =
+          vk.get_temp_pools().begin(vk.get_queues().get_qf_graphics());
       cmd_buf.begin(vk::CommandBufferBeginInfo{
           .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
       cmd_buf.pipelineBarrier2(
           vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
       cmd_buf.end();
-      vk.get_temp_pools().end(std::move(cmd_buf), qfi, {},
+      vk.get_temp_pools().end(std::move(cmd_buf),
+                              vk.get_queues().get_qf_graphics(), {},
                               plane.wait_sem_info(), plane.signal_sem_info());
       plane.commit_image_barrier(barrier);
     }
