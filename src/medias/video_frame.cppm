@@ -257,10 +257,7 @@ public:
   i32 plane_index;
 };
 
-class StructLockedVideoFramePlane : public LockedVideoFramePlane {
-public:
-  ~StructLockedVideoFramePlane() override = default;
-
+struct StructVideoFramePlaneData {
   vk::Image image;
   vk::Format format;
   vk::ImageLayout layout;
@@ -270,34 +267,54 @@ public:
   u64 semaphore_value;
   u32 queue_family_idx;
   i32 num_layers;
+};
 
-  vk::Image get_image() const override { return image; }
-  vk::Format get_format() const override { return format; }
-  vk::ImageLayout get_image_layout() const override { return layout; }
-  vk::PipelineStageFlags2 get_stage_flag() const override { return stage; }
-  vk::AccessFlags2 get_access_flag() const override { return access; }
-  vk::Semaphore get_semaphore() const override { return semaphore; }
-  u64 get_semaphore_value() const override { return semaphore_value; }
-  u32 get_queue_family_idx() const override { return queue_family_idx; }
-  i32 get_num_layers() const override { return num_layers; }
+class StructLockedVideoFramePlane : public LockedVideoFramePlane {
+public:
+  StructLockedVideoFramePlane(StructVideoFramePlaneData &data,
+                              std::unique_lock<std::mutex> mutex)
+      : data{data}, mutex{std::move(mutex)} {}
 
-  void set_image_layout(vk::ImageLayout value) override { layout = value; }
-  void set_stage_flag(vk::PipelineStageFlags2 value) override { stage = value; }
-  void set_access_flag(vk::AccessFlags2 value) override { access = value; }
-  void set_semaphore(vk::Semaphore value) override { semaphore = value; }
-  void set_semaphore_value(u64 value) override { semaphore_value = value; }
-  void set_queue_family_idx(u32 value) override { queue_family_idx = value; }
+  ~StructLockedVideoFramePlane() override = default;
+
+  StructVideoFramePlaneData &data;
+  std::unique_lock<std::mutex> mutex;
+
+  vk::Image get_image() const override { return data.image; }
+  vk::Format get_format() const override { return data.format; }
+  vk::ImageLayout get_image_layout() const override { return data.layout; }
+  vk::PipelineStageFlags2 get_stage_flag() const override { return data.stage; }
+  vk::AccessFlags2 get_access_flag() const override { return data.access; }
+  vk::Semaphore get_semaphore() const override { return data.semaphore; }
+  u64 get_semaphore_value() const override { return data.semaphore_value; }
+  u32 get_queue_family_idx() const override { return data.queue_family_idx; }
+  i32 get_num_layers() const override { return data.num_layers; }
+
+  void set_image_layout(vk::ImageLayout value) override { data.layout = value; }
+  void set_stage_flag(vk::PipelineStageFlags2 value) override {
+    data.stage = value;
+  }
+  void set_access_flag(vk::AccessFlags2 value) override { data.access = value; }
+  void set_semaphore(vk::Semaphore value) override { data.semaphore = value; }
+  void set_semaphore_value(u64 value) override { data.semaphore_value = value; }
+  void set_queue_family_idx(u32 value) override {
+    data.queue_family_idx = value;
+  }
 };
 
 class StructVideoFramePlane : public VideoFramePlane {
 public:
+  StructVideoFramePlane(const StructVideoFramePlaneData &data) : data{data} {}
   ~StructVideoFramePlane() = default;
 
   std::unique_ptr<LockedVideoFramePlane> lock() override {
-    return std::make_unique<StructLockedVideoFramePlane>(locked);
+    return std::make_unique<StructLockedVideoFramePlane>(
+        data, std::unique_lock{mutex});
   }
 
-  StructLockedVideoFramePlane locked;
+private:
+  StructVideoFramePlaneData data;
+  std::mutex mutex;
 };
 
 struct VideoFrame {
@@ -462,18 +479,21 @@ VideoFrame upload_frames_to_gpu(graphics::VkContext &vk,
       });
   cmd_buf.end();
   auto [sem, sem_value] = tx_pool.end(
-      std::move(cmd_buf), vk.get_queues().get_qf_transfer(), std::move(buffer));
+      std::move(cmd_buf), vk.get_queues().get_qf_transfer(), std::move(buffer),
+      {}, {}, vk::PipelineStageFlagBits2::eTransfer);
 
-  auto plane = std::make_unique<StructVideoFramePlane>();
-  plane->locked.image = *image;
-  plane->locked.format = supported_formats[format].front();
-  plane->locked.layout = vk::ImageLayout::eTransferDstOptimal;
-  plane->locked.stage = vk::PipelineStageFlagBits2::eTransfer;
-  plane->locked.access = vk::AccessFlagBits2::eTransferWrite;
-  plane->locked.semaphore = *sem;
-  plane->locked.semaphore_value = sem_value;
-  plane->locked.queue_family_idx = vk.get_queues().get_qf_transfer();
-  plane->locked.num_layers = static_cast<i32>(rescaled_frames.size());
+  auto plane =
+      std::make_unique<StructVideoFramePlane>(StructVideoFramePlaneData{
+          .image = *image,
+          .format = supported_formats[format].front(),
+          .layout = vk::ImageLayout::eTransferDstOptimal,
+          .stage = vk::PipelineStageFlagBits2::eTransfer,
+          .access = vk::AccessFlagBits2::eTransferWrite,
+          .semaphore = *sem,
+          .semaphore_value = sem_value,
+          .queue_family_idx = vk.get_queues().get_qf_transfer(),
+          .num_layers = static_cast<i32>(rescaled_frames.size()),
+      });
 
   std::vector<std::unique_ptr<VideoFramePlane>> planes;
   planes.emplace_back(std::move(plane));
