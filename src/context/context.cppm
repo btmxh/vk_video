@@ -76,7 +76,34 @@ struct VideoArgs {
 /// \brief Application context, containing a preview window and Vulkan objects
 class Context {
 public:
-  Context(ContextArgs &&args);
+  Context(ContextArgs &&args)
+      : args{std::move(args)}, instance{vkfw::initUnique(args.init_hint())},
+        window{vkfw::createWindowUnique(static_cast<std::size_t>(args.width),
+                                        static_cast<std::size_t>(args.height),
+                                        args.render_output.c_str(),
+                                        args.window_hint())},
+        vk{window.get()} {
+    window->callbacks()->on_key = [this](auto, vkfw::Key key, auto,
+                                         vkfw::KeyAction action, auto) {
+      if (action == vkfw::KeyAction::ePress)
+        return;
+      static constexpr i64 seek_amount = 1e9;
+      std::lock_guard lock{audio_mutex};
+      switch (key) {
+      case vkfw::Key::eLeft:
+        master_clock.seek(-std::min(seek_amount, master_clock.get_time()));
+        break;
+      case vkfw::Key::eRight:
+        master_clock.seek(seek_amount);
+        break;
+      case vkfw::Key::eSpace:
+        master_clock.is_paused() ? master_clock.play() : master_clock.pause();
+        break;
+      default:
+        return;
+      }
+    };
+  }
 
   vkfw::Window get_window() { return window.get(); }
   graphics::VkContext &get_vulkan() { return vk; }
@@ -87,11 +114,106 @@ public:
   bool alive() const;
   void update();
 
+  i64 get_time() { return master_clock.get_time(); }
+
+  void open_audio(std::string_view path) {
+    std::lock_guard lock{audio_mutex};
+    audio = std::make_unique<medias::AudioStream>(
+        path, medias::AudioFormat{
+                  .sample_fmt = args.sample_format,
+                  .ch_layout = args.ch_layout,
+                  .sample_rate = args.sample_rate,
+              });
+    auto &dev = tp::portaudio::System::instance().defaultOutputDevice();
+    audio_stream =
+        std::make_unique<tp::portaudio::MemFunCallbackStream<Context>>(
+            tp::portaudio::StreamParameters{
+                tp::portaudio::DirectionSpecificStreamParameters::null(),
+                tp::portaudio::DirectionSpecificStreamParameters{
+                    dev,
+                    args.ch_layout->nb_channels,
+                    [this]() {
+                      switch (args.sample_format) {
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8:
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8P:
+                        return tp::portaudio::SampleDataFormat::UINT8;
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_S16:
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_S16P:
+                        return tp::portaudio::SampleDataFormat::INT16;
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_S32:
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_S32P:
+                        return tp::portaudio::SampleDataFormat::INT32;
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_FLT:
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_FLTP:
+                        return tp::portaudio::SampleDataFormat::FLOAT32;
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_DBL:
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_DBLP:
+                        throw std::runtime_error{
+                            "AV_SAMPLE_FMT_DBL* is not supported"};
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_S64:
+                      case tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_S64P:
+                        throw std::runtime_error{
+                            "AV_SAMPLE_FMT_S64* is not supported"};
+                      default:
+                        throw std::runtime_error{"Invalid sample format"};
+                        break;
+                      }
+                    }(),
+                    tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format),
+                    dev.defaultLowOutputLatency(),
+                    nullptr,
+                },
+                static_cast<double>(args.sample_rate),
+                1024,
+                0,
+            },
+            *this, &Context::audio_callback);
+    audio_stream->start();
+  }
+
 private:
   ContextArgs args;
   vkfw::UniqueInstance instance;
   vkfw::UniqueWindow window;
   graphics::VkContext vk;
+
+  tp::portaudio::AutoSystem audio_sys;
+  std::mutex audio_mutex;
+  std::unique_ptr<medias::Audio> audio;
+  std::unique_ptr<tp::portaudio::Stream> audio_stream;
+
+  SteadyClock master_clock;
+
+  int audio_callback(const void *, void *out, unsigned long num_frames,
+                     const tp::portaudio::PaStreamCallbackTimeInfo *time_info,
+                     tp::portaudio::PaStreamCallbackFlags) {
+
+    std::lock_guard lock{audio_mutex};
+    u8 *u8_out = static_cast<u8 *>(out);
+    auto out_samples = tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format)
+                           ? &u8_out
+                           : static_cast<u8 *const *>(out);
+    u8 zero_byte =
+        args.sample_format == tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8 ||
+                args.sample_format ==
+                    tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8P
+            ? 0x80
+            : 0;
+    if (audio && !master_clock.is_paused()) {
+      audio->get_samples(num_frames, out_samples);
+
+    } else if (tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format))
+      std::memset(out, zero_byte,
+                  num_frames *
+                      tp::ffmpeg::get_sample_fmt_size(args.sample_format) *
+                      args.ch_layout->nb_channels);
+    else
+      for (auto i = 0; i < args.ch_layout->nb_channels; ++i)
+        std::memset(out_samples[i], zero_byte,
+                    num_frames *
+                        tp::ffmpeg::get_sample_fmt_size(args.sample_format));
+    return 0;
+  }
 };
 } // namespace vkvideo::context
 
@@ -110,14 +232,6 @@ vkfw::InitHints ContextArgs::init_hint() const {
 }
 
 vkfw::WindowHints ContextArgs::window_hint() const { return {}; }
-
-Context::Context(ContextArgs &&args)
-    : args{std::move(args)}, instance{vkfw::initUnique(args.init_hint())},
-      window{vkfw::createWindowUnique(static_cast<std::size_t>(args.width),
-                                      static_cast<std::size_t>(args.height),
-                                      args.render_output.c_str(),
-                                      args.window_hint())},
-      vk{window.get()} {}
 
 static bool is_webp_path(std::string_view path) {
   std::ifstream file(path.data(), std::ios::binary);
@@ -173,7 +287,8 @@ std::unique_ptr<medias::Video> Context::open_video(std::string_view path,
     auto hwaccel = args.hwaccel;
     if (mode == DecodeMode::eReadAll) {
       if (hwaccel == medias::HWAccel::eOn)
-        warn("Hardware-acceleration is not supported for read-all decode mode");
+        warn("Hardware-acceleration is not supported for read-all decode "
+             "mode");
       hwaccel = medias::HWAccel::eOff;
     } else {
       if (hwaccel == medias::HWAccel::eAuto)
@@ -181,8 +296,7 @@ std::unique_ptr<medias::Video> Context::open_video(std::string_view path,
     }
 
     stream = std::make_unique<medias::FFmpegStream>(
-        std::move(raw_ffmpeg_stream), get_vulkan().get_hwaccel_ctx(),
-        tp::ffmpeg::MediaType::Video, hwaccel);
+        std::move(raw_ffmpeg_stream), get_vulkan().get_hwaccel_ctx(), hwaccel);
     break;
   }
   case DecoderType::eLibWebP: {

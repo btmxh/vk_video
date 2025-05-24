@@ -385,20 +385,13 @@ int main(int argc, char *argv[]) {
     }
   };
 
-  auto start_time = std::chrono::high_resolution_clock::now();
-  auto prev_time = start_time;
-
   std::unordered_map<VideoPipelineInfo, std::shared_ptr<VideoPipeline>>
       pipelines;
 
+    context.open_audio(argv[1]);
+
   for (i32 i = 0; context.alive(); ++i) {
     context.update();
-
-    auto now = std::chrono::high_resolution_clock::now();
-    auto elapsed = now - prev_time;
-    prev_time = now;
-
-    auto elapsed_from_start = now - start_time;
 
     auto &present = *context.get_vulkan().get_swapchain_ctx();
     auto frame = present.begin_frame();
@@ -411,8 +404,7 @@ int main(int argc, char *argv[]) {
         image_opt.has_value()) {
       auto [image_idx, image, image_view, image_size, image_format,
             image_present_sem] = image_opt.value();
-      auto video_frame = video->get_frame(elapsed_from_start.count() %
-                                          video->get_duration().value_or(1e9));
+      auto video_frame = video->get_frame(context.get_time());
       VideoPipelineInfo vid_info{
           .color_attachment_format = image_format,
           .pixel_format = video_frame.has_value() ? video_frame->frame_format

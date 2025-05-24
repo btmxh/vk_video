@@ -7,8 +7,10 @@ target_sources(
         BASE_DIRS "${CMAKE_CURRENT_LIST_DIR}"
         FILES
             core/types.cppm
+            core/clock.cppm
             core/unique_any.cppm
             core/mod.cppm
+            third_party/portaudio.cppm
             third_party/ffmpeg.cppm
             third_party/webp.cppm
             third_party/mod.cppm
@@ -20,6 +22,7 @@ target_sources(
             graphics/vkc.cppm
             graphics/mod.cppm
             medias/stb_image_write.cppm
+            medias/audio.cppm
             medias/video.cppm
             medias/video_frame.cppm
             medias/stream.cppm
@@ -43,7 +46,13 @@ target_compile_features(vkvideo PUBLIC cxx_std_23)
 
 target_link_libraries(
     vkvideo
-    PUBLIC vkvideo_VulkanHpp vkfw-module vma vk-bootstrap FFmpeg::FFmpeg
+    PUBLIC
+        vkvideo_VulkanHpp
+        vkfw-module
+        vma
+        vk-bootstrap
+        FFmpeg::FFmpeg
+        PortAudioCpp::PortAudioCpp
 )
 
 if(WebP_FOUND)

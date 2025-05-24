@@ -125,7 +125,6 @@ private:
 class FFmpegStream : public Stream {
 public:
   FFmpegStream(RawFFmpegStream raw, const tp::ffmpeg::BufferRef &hwaccel_ctx,
-               tp::ffmpeg::MediaType stream_type = tp::ffmpeg::MediaType::Video,
                HWAccel hwaccel = HWAccel::eAuto)
       : raw{std::move(raw)} {
     decoder = tp::ffmpeg::CodecContext::create(raw.get_codec());
@@ -133,29 +132,24 @@ public:
                                  ->streams[this->raw.get_stream_index()]
                                  ->codecpar);
     if (hwaccel == HWAccel::eOn || hwaccel == HWAccel::eAuto) {
-      if (stream_type == tp::ffmpeg::MediaType::Video) {
-        decoder->hw_device_ctx = av_buffer_ref(hwaccel_ctx.get());
-        decoder->opaque = this;
-        decoder->get_format = [](AVCodecContext *c,
-                                 const tp::ffmpeg::PixelFormat *formats) {
-          for (auto p = formats; *p != tp::ffmpeg::PixelFormat::AV_PIX_FMT_NONE;
-               ++p) {
-            if (*p == tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN) {
-              // Vulkan is available, use it
-              return *p;
-            }
+      decoder->hw_device_ctx = av_buffer_ref(hwaccel_ctx.get());
+      decoder->opaque = this;
+      decoder->get_format = [](AVCodecContext *c,
+                               const tp::ffmpeg::PixelFormat *formats) {
+        for (auto p = formats; *p != tp::ffmpeg::PixelFormat::AV_PIX_FMT_NONE;
+             ++p) {
+          if (*p == tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN) {
+            // Vulkan is available, use it
+            return *p;
           }
+        }
 
-          std::println("Vulkan-accelerated decoding is not available for this "
-                       "format. Falling back to software decoding.");
-          // fallback to sw format on vulkan error
-          return *formats;
-        };
-        decoder->pix_fmt = tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN;
-      } else {
-        std::cerr << "WARNING: Hardware acceleration is only supported for "
-                     "video streams\n";
-      }
+        std::println("Vulkan-accelerated decoding is not available for this "
+                     "format. Falling back to software decoding.");
+        // fallback to sw format on vulkan error
+        return *formats;
+      };
+      decoder->pix_fmt = tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN;
     }
 
     decoder.open();

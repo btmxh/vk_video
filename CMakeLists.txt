@@ -31,6 +31,7 @@ find_package(
     COMPONENTS AVCODEC AVUTIL AVFORMAT SWSCALE SWRESAMPLE
     REQUIRED
 )
+find_package(PortAudioCpp REQUIRED)
 add_subdirectory(extern)
 
 add_library(vkvideo_VulkanHpp)
