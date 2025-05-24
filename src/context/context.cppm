@@ -187,22 +187,22 @@ private:
   int audio_callback(const void *, void *out, unsigned long num_frames,
                      const tp::portaudio::PaStreamCallbackTimeInfo *time_info,
                      tp::portaudio::PaStreamCallbackFlags) {
-
     std::lock_guard lock{audio_mutex};
     u8 *u8_out = static_cast<u8 *>(out);
     auto out_samples = tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format)
                            ? &u8_out
                            : static_cast<u8 *const *>(out);
+    if (audio && !master_clock.is_paused()) {
+      num_frames -= audio->get_samples(num_frames, out_samples);
+    }
+
     u8 zero_byte =
         args.sample_format == tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8 ||
                 args.sample_format ==
                     tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8P
             ? 0x80
             : 0;
-    if (audio && !master_clock.is_paused()) {
-      audio->get_samples(num_frames, out_samples);
-
-    } else if (tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format))
+    if (tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format))
       std::memset(out, zero_byte,
                   num_frames *
                       tp::ffmpeg::get_sample_fmt_size(args.sample_format) *

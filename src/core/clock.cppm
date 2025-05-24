@@ -32,15 +32,8 @@ public:
     return rel_time + offset;
   }
 
-  void seek(i64 amount) {
-    start_time = now();
-    offset += amount;
-  }
-
-  void seek_to(i64 time) {
-    start_time = now();
-    offset = time;
-  }
+  void seek(i64 amount) { offset += amount; }
+  void seek_to(i64 time) { seek(time - get_time()); }
 
   void pause() {
     offset = get_time();
@@ -57,7 +50,7 @@ public:
 
 private:
   std::chrono::steady_clock::time_point start_time;
-  i64 offset;
+  i64 offset = 0;
   bool paused = false;
 };
 } // namespace vkvideo
