@@ -388,7 +388,18 @@ int main(int argc, char *argv[]) {
   std::unordered_map<VideoPipelineInfo, std::shared_ptr<VideoPipeline>>
       pipelines;
 
-    context.open_audio(argv[1]);
+  auto get_pipeline = [&](const VideoPipelineInfo &info) {
+    if (auto it = pipelines.find(info); it != pipelines.end()) {
+      return it->second;
+    } else {
+      auto pipeline =
+          std::make_shared<VideoPipeline>(vk.get_device(), info, fif_cnt);
+      pipelines.emplace(info, pipeline);
+      return pipeline;
+    }
+  };
+
+  context.open_audio(argv[1]);
 
   for (i32 i = 0; context.alive(); ++i) {
     context.update();
@@ -405,58 +416,52 @@ int main(int argc, char *argv[]) {
       auto [image_idx, image, image_view, image_size, image_format,
             image_present_sem] = image_opt.value();
       auto video_frame = video->get_frame(context.get_time());
-      VideoPipelineInfo vid_info{
-          .color_attachment_format = image_format,
-          .pixel_format = video_frame.has_value() ? video_frame->frame_format
-                                                  : AV_PIX_FMT_NONE,
-      };
       auto planes = video_frame
                         .transform([](VideoFrame &frame) {
                           return frame.data->get_planes();
                         })
                         .value_or(std::vector<VideoFramePlane *>{});
-      std::vector<std::unique_ptr<LockedVideoFramePlane>> locked_planes;
-      for (auto plane : planes) {
-        locked_planes.emplace_back(plane->lock());
-      }
+      auto locked_planes = planes |
+                           std::ranges::views::transform([](const auto &plane) {
+                             return plane->lock();
+                           }) |
+                           std::ranges::to<std::vector>();
+      auto pipeline = get_pipeline(VideoPipelineInfo{
+          .plane_formats = locked_planes |
+                           std::ranges::views::transform([](const auto &plane) {
+                             return plane->get_format();
+                           }) |
+                           std::ranges::to<std::vector>(),
+          .color_attachment_format = image_format,
+          .pixel_format = video_frame.has_value() ? video_frame->frame_format
+                                                  : AV_PIX_FMT_NONE,
+      });
+      auto views =
+          locked_planes | std::ranges::views::transform([&](const auto &plane) {
+            return pipeline->create_image_view(vk.get_device(), *plane);
+          }) |
+          std::ranges::to<std::vector>();
 
       if (video_frame.has_value()) {
-        for (const auto &plane : locked_planes)
-          vid_info.plane_formats.push_back(plane->get_format());
-      }
-
-      auto it = pipelines.find(vid_info);
-      if (it == pipelines.end()) {
-        auto pipeline =
-            std::make_shared<VideoPipeline>(vk.get_device(), vid_info, fif_cnt);
-        std::tie(it, std::ignore) = pipelines.try_emplace(vid_info, pipeline);
-      }
-
-      auto pipeline = it->second;
-      std::vector<vk::raii::ImageView> views;
-      for (const auto &plane : locked_planes) {
-        views.emplace_back(
-            pipeline->create_image_view(vk.get_device(), *plane));
-      }
-
-      if (video_frame.has_value())
         handle_transition(video_frame.value(), *locked_planes.front());
 
+        vk::DescriptorImageInfo desc_sampler{
+            .sampler = pipeline->sampler,
+            .imageView = views.front(),
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        };
+        vk.get_device().updateDescriptorSets(
+            vk::WriteDescriptorSet{
+                .dstSet = *pipeline->descriptor_sets[frame.fif_idx],
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .pImageInfo = &desc_sampler,
+            },
+            {});
+      }
+
       // update desc set
-      vk::DescriptorImageInfo desc_sampler{
-          .sampler = pipeline->sampler,
-          .imageView = views.front(),
-          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-      };
-      vk.get_device().updateDescriptorSets(
-          vk::WriteDescriptorSet{
-              .dstSet = *pipeline->descriptor_sets[frame.fif_idx],
-              .dstBinding = 0,
-              .descriptorCount = 1,
-              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-              .pImageInfo = &desc_sampler,
-          },
-          {});
 
       // record cmdbuf
       auto &cmd_buf = cmd_bufs[frame.fif_idx];
@@ -484,6 +489,7 @@ int main(int argc, char *argv[]) {
         cmd_buf.pipelineBarrier2(
             vk::DependencyInfo{}.setImageMemoryBarriers(sc_img_trans));
       }
+
       // here we use the huge ass graphics pipeline
       vk::RenderingAttachmentInfo color_attachment{
           .imageView = image_view,
@@ -499,38 +505,41 @@ int main(int argc, char *argv[]) {
           .layerCount = 1,
       }
                                  .setColorAttachments(color_attachment));
-      cmd_buf.setViewport(0,
-                          vk::Viewport{
-                              .x = 0,
-                              .y = 0,
-                              .width = static_cast<float>(image_size.width),
-                              .height = static_cast<float>(image_size.height),
-                          });
-      cmd_buf.setScissor(0, vk::Rect2D{
-                                .offset = {0, 0},
-                                .extent = image_size,
-                            });
-      cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                           pipeline->pipeline);
-      cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                 pipeline->pipeline_layout, 0,
-                                 *pipeline->descriptor_sets[frame.fif_idx], {});
-      FrameInfoPushConstants pc_frame{};
       if (video_frame.has_value()) {
-        pc_frame.frame_index =
-            static_cast<float>(video_frame->frame_index.value_or(0.0f));
+        cmd_buf.setViewport(0,
+                            vk::Viewport{
+                                .x = 0,
+                                .y = 0,
+                                .width = static_cast<float>(image_size.width),
+                                .height = static_cast<float>(image_size.height),
+                            });
+        cmd_buf.setScissor(0, vk::Rect2D{
+                                  .offset = {0, 0},
+                                  .extent = image_size,
+                              });
+        cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                             pipeline->pipeline);
+        cmd_buf.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics, pipeline->pipeline_layout, 0,
+            *pipeline->descriptor_sets[frame.fif_idx], {});
         auto [width, height] = video_frame->data->get_extent();
         auto [padded_width, padded_height] =
             video_frame->data->get_padded_extent();
-        pc_frame.uv_max[0] =
-            static_cast<float>(width) / static_cast<float>(padded_width);
-        pc_frame.uv_max[1] =
-            static_cast<float>(height) / static_cast<float>(padded_height);
+        cmd_buf.pushConstants<FrameInfoPushConstants>(
+            pipeline->pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
+            FrameInfoPushConstants{
+                .uv_max =
+                    {
+                        static_cast<float>(width) /
+                            static_cast<float>(padded_width),
+                        static_cast<float>(height) /
+                            static_cast<float>(padded_height),
+                    },
+                .frame_index =
+                    static_cast<float>(video_frame->frame_index.value_or(0.0f)),
+            });
+        cmd_buf.draw(3, 1, 0, 0);
       }
-      cmd_buf.pushConstants<FrameInfoPushConstants>(
-          pipeline->pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
-          pc_frame);
-      cmd_buf.draw(3, 1, 0, 0);
 
       cmd_buf.endRendering();
 
