@@ -92,9 +92,11 @@ public:
       switch (key) {
       case vkfw::Key::eLeft:
         master_clock.seek(-std::min(seek_amount, master_clock.get_time()));
+        audio->seek(master_clock.get_time());
         break;
       case vkfw::Key::eRight:
         master_clock.seek(seek_amount);
+        audio->seek(master_clock.get_time());
         break;
       case vkfw::Key::eSpace:
         master_clock.is_paused() ? master_clock.play() : master_clock.pause();
@@ -184,6 +186,29 @@ private:
 
   SteadyClock master_clock;
 
+  void fill_silence(void *out, i32 offset, i32 num_samples) {
+    bool interleaved =
+        tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format);
+    i32 sample_size = (interleaved ? args.ch_layout->nb_channels : 1) *
+                      tp::ffmpeg::get_sample_fmt_size(args.sample_format);
+    u8 zero_byte =
+        args.sample_format == tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8 ||
+                args.sample_format ==
+                    tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8P
+            ? 0x80
+            : 0;
+    if (interleaved) {
+      std::memset(reinterpret_cast<u8 *>(out) + sample_size * offset, zero_byte,
+                  sample_size * num_samples);
+    } else {
+      u8 *const *ptr = reinterpret_cast<u8 *const *>(out);
+      for (i32 i = 0; i < args.ch_layout->nb_channels; ++i) {
+        std::memset(ptr[i] + sample_size * offset, zero_byte,
+                    sample_size * num_samples);
+      }
+    }
+  }
+
   int audio_callback(const void *, void *out, unsigned long num_frames,
                      const tp::portaudio::PaStreamCallbackTimeInfo *time_info,
                      tp::portaudio::PaStreamCallbackFlags) {
@@ -192,26 +217,16 @@ private:
     auto out_samples = tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format)
                            ? &u8_out
                            : static_cast<u8 *const *>(out);
+    i32 offset = 0;
     if (audio && !master_clock.is_paused()) {
-      num_frames -= audio->get_samples(num_frames, out_samples);
+      offset = audio->get_samples(num_frames, out_samples);
+      auto out_delay = time_info->outputBufferDacTime - time_info->currentTime;
+      std::println("Master clock: {:.3f}, Audio clock: {:.3f}, delay {:.3f}",
+                   master_clock.get_time() * 1e-9, audio->get_time() * 1e-9,
+                   (master_clock.get_time() - audio->get_time()) * 1e-9);
     }
 
-    u8 zero_byte =
-        args.sample_format == tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8 ||
-                args.sample_format ==
-                    tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8P
-            ? 0x80
-            : 0;
-    if (tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format))
-      std::memset(out, zero_byte,
-                  num_frames *
-                      tp::ffmpeg::get_sample_fmt_size(args.sample_format) *
-                      args.ch_layout->nb_channels);
-    else
-      for (auto i = 0; i < args.ch_layout->nb_channels; ++i)
-        std::memset(out_samples[i], zero_byte,
-                    num_frames *
-                        tp::ffmpeg::get_sample_fmt_size(args.sample_format));
+    fill_silence(out, offset, num_frames - offset);
     return 0;
   }
 };

@@ -113,6 +113,7 @@ public:
   void seek(i64 time) override {
     Video::seek(time);
     frame.unref();
+    current_video_frame.reset();
     stream->seek(time);
   }
 

@@ -429,6 +429,10 @@ public:
 
   i64 get_delay() { return av_call(swr_get_delay(get(), 1e9)); }
 
+  void drop_output(i32 num_samples) {
+    av_call(swr_drop_output(get(), num_samples));
+  }
+
   static AudioResampler create(const ChannelLayout &out_ch_layout,
                                SampleFormat out_sample_fmt, i32 out_sample_rate,
                                const ChannelLayout &in_ch_layout,

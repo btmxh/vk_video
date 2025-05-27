@@ -36,14 +36,37 @@ public:
         resampler{tp::ffmpeg::AudioResampler::create(
             format.ch_layout, format.sample_fmt, format.sample_rate,
             stream.get_decoder()->ch_layout, stream.get_decoder()->sample_fmt,
-            stream.get_decoder()->sample_rate)} {}
+            stream.get_decoder()->sample_rate)},
+        format{format} {}
 
   ~AudioStream() override = default;
 
   void seek(i64 time) override {
     stream.seek(time);
-    resampler.recv(0, nullptr);
-    assert(resampler.num_avail_samples() == 0);
+    // flush buffer
+    resampler.send(nullptr);
+
+    // after seek, we are at some timestamp < time
+    // so we need to seek to a frame such that
+    // pts < time < pts + duration
+    auto frame = tp::ffmpeg::Frame::create();
+    bool has_next = false;
+    do {
+      resampler.drop_output(frame->nb_samples);
+      std::tie(frame, has_next) = stream.next_frame(std::move(frame));
+      if (!has_next) {
+        return;
+      }
+
+      resampler.send(frame);
+      next_pts = frame->pts + frame->duration;
+    } while (next_pts < time);
+
+    auto num_dropped =
+        (time - frame->pts) * format.sample_rate / static_cast<i64>(1e9);
+    num_dropped = std::clamp<i32>(num_dropped, 0, frame->nb_samples);
+
+    resampler.drop_output(num_dropped);
   }
 
   i64 get_time() override { return next_pts - resampler.get_delay(); }
@@ -57,6 +80,7 @@ private:
   FFmpegStream stream;
   tp::ffmpeg::AudioResampler resampler;
   i64 next_pts;
+  AudioFormat format;
 
   void decode_until(i32 num_samples) {
     auto frame = tp::ffmpeg::Frame::create();

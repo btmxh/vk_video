@@ -85,8 +85,9 @@ public:
   tp::ffmpeg::Codec get_codec() const { return codec; }
 
   void seek(i64 pos) {
-    tp::ffmpeg::av_call(av_seek_frame(demuxer.get(), -1,
-                                      pos * AV_TIME_BASE / 1000000000,
+    auto [p, q] = demuxer->streams[stream_index]->time_base;
+    tp::ffmpeg::av_call(av_seek_frame(demuxer.get(), stream_index,
+                                      pos * q / p / 1000000000,
                                       AVSEEK_FLAG_BACKWARD));
     reach_eof_packet = false;
   }
