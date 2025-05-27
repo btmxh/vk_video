@@ -219,11 +219,14 @@ private:
                            : static_cast<u8 *const *>(out);
     i32 offset = 0;
     if (audio && !master_clock.is_paused()) {
-      offset = audio->get_samples(num_frames, out_samples);
       auto out_delay = time_info->outputBufferDacTime - time_info->currentTime;
+      auto master_out_time = master_clock.get_time() + out_delay;
+      auto audio_out_time = audio->get_time();
+      auto sync_delay = master_out_time - audio_out_time;
       std::println("Master clock: {:.3f}, Audio clock: {:.3f}, delay {:.3f}",
-                   master_clock.get_time() * 1e-9, audio->get_time() * 1e-9,
-                   (master_clock.get_time() - audio->get_time()) * 1e-9);
+                   master_out_time * 1e-9, audio_out_time * 1e-9,
+                   sync_delay * 1e-9);
+      offset = audio->get_samples(num_frames, out_samples);
     }
 
     fill_silence(out, offset, num_frames - offset);
