@@ -6,6 +6,7 @@ import vkvideo.core;
 import vkvideo.graphics;
 import vkvideo.medias;
 import vkvideo.third_party;
+import :avsync;
 
 export namespace vkvideo::context {
 
@@ -82,7 +83,12 @@ public:
                                         static_cast<std::size_t>(args.height),
                                         args.render_output.c_str(),
                                         args.window_hint())},
-        vk{window.get()} {
+        vk{window.get()},
+        output_resampler{tp::ffmpeg::AudioResampler::create(
+            this->args.ch_layout, this->args.sample_format,
+            this->args.sample_rate, this->args.ch_layout,
+            this->args.sample_format, this->args.sample_rate)},
+        audio_sync_ctx{this->args.sample_rate} {
     window->callbacks()->on_key = [this](auto, vkfw::Key key, auto,
                                          vkfw::KeyAction action, auto) {
       if (action == vkfw::KeyAction::ePress)
@@ -183,6 +189,7 @@ private:
   std::mutex audio_mutex;
   std::unique_ptr<medias::Audio> audio;
   std::unique_ptr<tp::portaudio::Stream> audio_stream;
+  tp::ffmpeg::AudioResampler output_resampler;
 
   SteadyClock master_clock;
 
@@ -209,9 +216,32 @@ private:
     }
   }
 
+  struct AudioSyncContext {
+    constexpr static i64 second = 1e9, nosync_threshold = 1e9, diff_avg_nb = 20;
+    constexpr static double sample_correction_rate_max = 0.1;
+    i64 diff_cum = 0, avg_diff = 0, diff_avg_count = 0;
+    const double diff_avg_coeff = std::exp(std::log(0.01) / diff_avg_nb);
+    i32 sample_rate;
+
+    AudioSyncContext(i32 sample_rate) : sample_rate{sample_rate} {}
+
+    void sync(i64 diff, i32 num_samples) {
+      i32 wanted = num_samples;
+      if (std::abs(diff) < nosync_threshold) {
+        diff_cum = diff + diff_avg_coeff * diff_cum;
+        if (diff_avg_count < diff_avg_nb) {
+          ++diff_avg_count;
+        } else {
+          i64 avg_diff = diff_cum / (1.0 - diff_avg_coeff);
+        }
+      }
+    }
+  } audio_sync_ctx;
+
   int audio_callback(const void *, void *out, unsigned long num_frames,
                      const tp::portaudio::PaStreamCallbackTimeInfo *time_info,
                      tp::portaudio::PaStreamCallbackFlags) {
+    static WeightedRunningAvg<i64> avg{20, std::exp(std::log(1e-2) / 20.0)};
     std::lock_guard lock{audio_mutex};
     u8 *u8_out = static_cast<u8 *>(out);
     auto out_samples = tp::ffmpeg::sample_fmt_is_interleaved(args.sample_format)
@@ -223,10 +253,39 @@ private:
       auto master_out_time = master_clock.get_time() + out_delay;
       auto audio_out_time = audio->get_time();
       auto sync_delay = master_out_time - audio_out_time;
-      std::println("Master clock: {:.3f}, Audio clock: {:.3f}, delay {:.3f}",
-                   master_out_time * 1e-9, audio_out_time * 1e-9,
-                   sync_delay * 1e-9);
-      offset = audio->get_samples(num_frames, out_samples);
+
+      auto avg_sync_delay = avg.update(sync_delay);
+      i32 num_wanted_frames = num_frames;
+      if (std::abs(sync_delay) < 1e8) {
+        if (avg_sync_delay.has_value() && std::abs(*avg_sync_delay) >= 1e7) {
+          num_wanted_frames = num_frames + sync_delay * args.sample_rate /
+                                               static_cast<i64>(1e9);
+          num_wanted_frames = std::clamp<i32>(
+              num_wanted_frames, num_frames * 0.9, num_frames * 1.1);
+        }
+      } else {
+        avg.reset();
+        audio->seek(master_out_time);
+        std::println("Seeking audio due to A/V drift...");
+      }
+
+      auto frame = tp::ffmpeg::Frame::create();
+      frame->sample_rate = args.sample_rate;
+      frame->format = args.sample_format;
+      frame->ch_layout = *args.ch_layout.get();
+      frame->nb_samples = num_wanted_frames;
+      frame.get_buffer();
+      frame->nb_samples = audio->get_samples(num_wanted_frames, frame->data);
+
+      output_resampler.send(frame);
+      if (num_wanted_frames != num_frames) {
+        std::println("Compensating audio: wanted {}, getting {}",
+                     num_wanted_frames, num_frames);
+      }
+
+      output_resampler.set_compensation(
+          num_wanted_frames - static_cast<i32>(num_frames), num_frames);
+      offset = output_resampler.recv(num_frames, out_samples);
     }
 
     fill_silence(out, offset, num_frames - offset);

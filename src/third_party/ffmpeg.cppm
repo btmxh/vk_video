@@ -433,11 +433,17 @@ public:
     av_call(swr_drop_output(get(), num_samples));
   }
 
+  void fill_silence(i32 count) { av_call(swr_inject_silence(get(), count)); }
+
+  void set_compensation(i32 delta, i32 distance) {
+    av_call(swr_set_compensation(get(), delta, distance));
+  }
+
   static AudioResampler create(const ChannelLayout &out_ch_layout,
                                SampleFormat out_sample_fmt, i32 out_sample_rate,
                                const ChannelLayout &in_ch_layout,
                                SampleFormat in_sample_fmt, i32 in_sample_rate) {
-    SwrContext *swr;
+    SwrContext *swr = nullptr;
     av_call(swr_alloc_set_opts2(&swr, out_ch_layout.get(), out_sample_fmt,
                                 out_sample_rate, in_ch_layout.get(),
                                 in_sample_fmt, in_sample_rate, 0, nullptr));

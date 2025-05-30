@@ -28,6 +28,7 @@ target_sources(
             medias/stream.cppm
             medias/mod.cppm
             context/context.cppm
+            context/avsync.cppm
             context/mod.cppm
             mod.cppm
     PRIVATE medias/video_formats.cpp

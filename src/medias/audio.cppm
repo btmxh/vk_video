@@ -79,7 +79,7 @@ public:
 private:
   FFmpegStream stream;
   tp::ffmpeg::AudioResampler resampler;
-  i64 next_pts;
+  i64 next_pts = 0;
   AudioFormat format;
 
   void decode_until(i32 num_samples) {
