@@ -61,37 +61,16 @@ public:
     while (true) {
       if (frame->pts + frame->duration > time) {
         if (frame->format == AV_PIX_FMT_VULKAN) {
-          AVVkFrame &vk_frame = *reinterpret_cast<AVVkFrame *>(frame->data[0]);
-
-          // TODO: maybe use a better way to fetch the formats?
-          auto ffmpeg_st = dynamic_cast<FFmpegStream *>(stream.get());
-          auto &decoder = ffmpeg_st->get_decoder();
-          assert(decoder->hw_frames_ctx);
-          auto hw_frames_ctx = reinterpret_cast<AVHWFramesContext *>(
-              decoder->hw_frames_ctx->data);
-          auto vk_frames_ctx =
-              static_cast<AVVulkanFramesContext *>(hw_frames_ctx->hwctx);
-
-          std::vector<std::unique_ptr<VideoFramePlane>> planes;
-          for (i32 i = 0; i < std::size(vk_frame.img) && vk_frame.img[i]; ++i) {
-            auto plane = std::make_unique<FFmpegBackedVideoFramePlane>();
-            plane->hw_frames_ctx = hw_frames_ctx;
-            plane->vk_frames_ctx = vk_frames_ctx;
-            plane->frame = &vk_frame;
-            plane->plane_index = i;
-            planes.emplace_back(std::move(plane));
-          }
-
+          auto hw_frames_ctx =
+              reinterpret_cast<AVHWFramesContext *>(frame->hw_frames_ctx->data);
           // internally, AVFrames using ref count to manage ownership, much like
           // std::shared_ptr. These two lines basically make a new frame that
           // points to the same frame data (i.e. copying shared_ptr's)
           auto backed_frame = tp::ffmpeg::Frame::create();
           backed_frame.ref_to(frame);
 
-          auto data = std::make_shared<VideoFrameData>(
-              frame->width, frame->height, std::move(planes),
-              std::move(backed_frame), hw_frames_ctx->width,
-              hw_frames_ctx->height);
+          auto data =
+              std::make_shared<FFmpegVideoFrameData>(std::move(backed_frame));
           return VideoFrame{data, hw_frames_ctx->sw_format};
         } else {
           if (current_video_frame.has_value())

@@ -9,6 +9,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <cassert>
+
 export module vkvideo.third_party:ffmpeg;
 
 import std;
@@ -105,10 +107,16 @@ public:
     return BufferRef{av_buffer_alloc(size)};
   }
 
-  std::span<u8> data() { return std::span<u8>{get()->data, get()->size}; }
+  template <class T = u8> std::span<T> data() {
+    assert(get()->size % sizeof(T) == 0);
+    return std::span<T>{reinterpret_cast<T *>(get()->data),
+                        get()->size / sizeof(T)};
+  }
 
-  std::span<const u8> data() const {
-    return std::span<const u8>{get()->data, get()->size};
+  template <class T = u8> std::span<const T> data() const {
+    assert(get()->size % sizeof(T) == 0);
+    return std::span<const T>{reinterpret_cast<const T *>(get()->data),
+                              get()->size / sizeof(T)};
   }
 };
 
