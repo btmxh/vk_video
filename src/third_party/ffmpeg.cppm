@@ -9,6 +9,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <cassert>
+
 export module vkvideo.third_party:ffmpeg;
 
 import std;
@@ -105,10 +107,16 @@ public:
     return BufferRef{av_buffer_alloc(size)};
   }
 
-  std::span<u8> data() { return std::span<u8>{get()->data, get()->size}; }
+  template <class T = u8> std::span<T> data() {
+    assert(get()->size % sizeof(T) == 0);
+    return std::span<T>{reinterpret_cast<T *>(get()->data),
+                        get()->size / sizeof(T)};
+  }
 
-  std::span<const u8> data() const {
-    return std::span<const u8>{get()->data, get()->size};
+  template <class T = u8> std::span<const T> data() const {
+    assert(get()->size % sizeof(T) == 0);
+    return std::span<const T>{reinterpret_cast<const T *>(get()->data),
+                              get()->size / sizeof(T)};
   }
 };
 
@@ -382,6 +390,7 @@ public:
 
   AVChannelLayout *operator->() { return &layout; }
   AVChannelLayout *get() { return &layout; }
+  const AVChannelLayout *get() const { return &layout; }
 
 private:
   AVChannelLayout layout;
@@ -408,6 +417,50 @@ public:
   }
 };
 
+class AudioResampler : std::unique_ptr<SwrContext, detail::SwrContextDeleter> {
+public:
+  using std::unique_ptr<SwrContext, detail::SwrContextDeleter>::unique_ptr;
+
+  i32 num_avail_samples() { return av_call(swr_get_out_samples(get(), 0)); }
+
+  void send(const tp::ffmpeg::Frame &frame) {
+    av_call(swr_convert_frame(get(), nullptr, frame.get()));
+  }
+
+  void send(i32 num_samples, const u8 *const *data) {
+    av_call(swr_convert(get(), nullptr, 0, data, num_samples));
+  }
+
+  i32 recv(i32 num_samples, u8 *const *data) {
+    return av_call(swr_convert(get(), data, num_samples, nullptr, 0));
+  }
+
+  i64 get_delay() { return av_call(swr_get_delay(get(), 1e9)); }
+
+  void drop_output(i32 num_samples) {
+    av_call(swr_drop_output(get(), num_samples));
+  }
+
+  void fill_silence(i32 count) { av_call(swr_inject_silence(get(), count)); }
+
+  void set_compensation(i32 delta, i32 distance) {
+    av_call(swr_set_compensation(get(), delta, distance));
+  }
+
+  static AudioResampler create(const ChannelLayout &out_ch_layout,
+                               SampleFormat out_sample_fmt, i32 out_sample_rate,
+                               const ChannelLayout &in_ch_layout,
+                               SampleFormat in_sample_fmt, i32 in_sample_rate) {
+    SwrContext *swr = nullptr;
+    av_call(swr_alloc_set_opts2(&swr, out_ch_layout.get(), out_sample_fmt,
+                                out_sample_rate, in_ch_layout.get(),
+                                in_sample_fmt, in_sample_rate, 0, nullptr));
+    AudioResampler resampler{swr};
+    av_call(swr_init(resampler.get()));
+    return resampler;
+  }
+};
+
 inline i64 rescale_to_ns(i64 time, Rational time_base) {
   return av_rescale(time, (i64)1e9 * time_base.num, time_base.den);
 }
@@ -421,6 +474,14 @@ enum class PixelFormatFlagBits : int {
 
 const PixelFormatDescriptor *get_pix_fmt_desc(PixelFormat format) {
   return av_pix_fmt_desc_get(format);
+}
+
+auto get_sample_fmt_size(SampleFormat fmt) {
+  return av_get_bytes_per_sample(fmt);
+}
+
+auto sample_fmt_is_interleaved(SampleFormat fmt) {
+  return !av_sample_fmt_is_planar(fmt);
 }
 
 } // namespace vkvideo::tp::ffmpeg

@@ -85,8 +85,9 @@ public:
   tp::ffmpeg::Codec get_codec() const { return codec; }
 
   void seek(i64 pos) {
-    tp::ffmpeg::av_call(av_seek_frame(demuxer.get(), -1,
-                                      pos * AV_TIME_BASE / 1000000000,
+    auto [p, q] = demuxer->streams[stream_index]->time_base;
+    tp::ffmpeg::av_call(av_seek_frame(demuxer.get(), stream_index,
+                                      pos * q / p / 1000000000,
                                       AVSEEK_FLAG_BACKWARD));
     reach_eof_packet = false;
   }
@@ -125,7 +126,6 @@ private:
 class FFmpegStream : public Stream {
 public:
   FFmpegStream(RawFFmpegStream raw, const tp::ffmpeg::BufferRef &hwaccel_ctx,
-               tp::ffmpeg::MediaType stream_type = tp::ffmpeg::MediaType::Video,
                HWAccel hwaccel = HWAccel::eAuto)
       : raw{std::move(raw)} {
     decoder = tp::ffmpeg::CodecContext::create(raw.get_codec());
@@ -133,29 +133,24 @@ public:
                                  ->streams[this->raw.get_stream_index()]
                                  ->codecpar);
     if (hwaccel == HWAccel::eOn || hwaccel == HWAccel::eAuto) {
-      if (stream_type == tp::ffmpeg::MediaType::Video) {
-        decoder->hw_device_ctx = av_buffer_ref(hwaccel_ctx.get());
-        decoder->opaque = this;
-        decoder->get_format = [](AVCodecContext *c,
-                                 const tp::ffmpeg::PixelFormat *formats) {
-          for (auto p = formats; *p != tp::ffmpeg::PixelFormat::AV_PIX_FMT_NONE;
-               ++p) {
-            if (*p == tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN) {
-              // Vulkan is available, use it
-              return *p;
-            }
+      decoder->hw_device_ctx = av_buffer_ref(hwaccel_ctx.get());
+      decoder->opaque = this;
+      decoder->get_format = [](AVCodecContext *c,
+                               const tp::ffmpeg::PixelFormat *formats) {
+        for (auto p = formats; *p != tp::ffmpeg::PixelFormat::AV_PIX_FMT_NONE;
+             ++p) {
+          if (*p == tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN) {
+            // Vulkan is available, use it
+            return *p;
           }
+        }
 
-          std::println("Vulkan-accelerated decoding is not available for this "
-                       "format. Falling back to software decoding.");
-          // fallback to sw format on vulkan error
-          return *formats;
-        };
-        decoder->pix_fmt = tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN;
-      } else {
-        std::cerr << "WARNING: Hardware acceleration is only supported for "
-                     "video streams\n";
-      }
+        std::println("Vulkan-accelerated decoding is not available for this "
+                     "format. Falling back to software decoding.");
+        // fallback to sw format on vulkan error
+        return *formats;
+      };
+      decoder->pix_fmt = tp::ffmpeg::PixelFormat::AV_PIX_FMT_VULKAN;
     }
 
     decoder.open();
