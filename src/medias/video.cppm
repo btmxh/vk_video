@@ -57,9 +57,11 @@ public:
 
   std::optional<VideoFrame> get_frame_monotonic(i64 time) override {
     Video::get_frame_monotonic(time);
-    assert(frame);
     while (true) {
       if (frame->pts + frame->duration > time) {
+        if (current_video_frame.has_value())
+          return current_video_frame;
+
         if (frame->format == AV_PIX_FMT_VULKAN) {
           auto hw_frames_ctx =
               reinterpret_cast<AVHWFramesContext *>(frame->hw_frames_ctx->data);
@@ -71,12 +73,10 @@ public:
 
           auto data =
               std::make_shared<FFmpegVideoFrameData>(std::move(backed_frame));
-          return VideoFrame{data, hw_frames_ctx->sw_format};
+          return current_video_frame.emplace(data, hw_frames_ctx->sw_format);
         } else {
-          if (current_video_frame.has_value())
-            return current_video_frame;
-          return current_video_frame = upload_frames_to_gpu(
-                     vk, std::span<tp::ffmpeg::Frame>{&frame, 1});
+          return current_video_frame.emplace(upload_frames_to_gpu(
+              vk, std::span<tp::ffmpeg::Frame>{&frame, 1}));
         }
       }
 

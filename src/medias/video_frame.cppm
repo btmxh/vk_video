@@ -28,6 +28,7 @@ struct HWVideoFormat {
 };
 
 extern const HWVideoFormat *get_hw_video_format(vk::Format format);
+extern std::vector<HWVideoFormat> get_all_formats();
 
 class AVVkFrameLock {
 public:
@@ -150,11 +151,11 @@ public:
     commit_image_barrier(barrier, get_semaphore_value() + 1);
   }
 
-  vk::SemaphoreSubmitInfo signal_sem_info() {
+  vk::SemaphoreSubmitInfo signal_sem_info(vk::PipelineStageFlags2 mask) {
     return vk::SemaphoreSubmitInfo{
         .semaphore = get_semaphore(),
         .value = get_semaphore_value() + 1,
-        .stageMask = get_stage_flag(),
+        .stageMask = mask,
     };
   }
 };
@@ -293,7 +294,7 @@ public:
     return static_cast<vk::ImageLayout>(frame->layout[plane_index]);
   }
   vk::PipelineStageFlags2 get_stage_flag() const override {
-    return vk::PipelineStageFlagBits2::eBottomOfPipe;
+    return vk::PipelineStageFlagBits2::eAllCommands;
   }
   vk::AccessFlags2 get_access_flag() const override {
     return static_cast<vk::AccessFlags2>(frame->access[plane_index]);
@@ -314,7 +315,7 @@ public:
         static_cast<std::decay_t<decltype(frame->layout[plane_index])>>(value);
   }
   void set_stage_flag(vk::PipelineStageFlags2 value) override {
-    // (hardcoded getter returns BottomOfPipe, so you probably don't need to
+    // (hardcoded getter returns eAllCommands, so you probably don't need to
     // store this — no-op) if needed, you could store somewhere
   }
 
@@ -508,7 +509,7 @@ VideoFrame upload_frames_to_gpu(graphics::VkContext &vk,
   cmd_buf.begin(vk::CommandBufferBeginInfo{
       .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
   vk::ImageMemoryBarrier2 img_barrier{
-      .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+      .srcStageMask = vk::PipelineStageFlagBits2::eNone,
       .srcAccessMask = vk::AccessFlagBits2::eNone,
       .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
       .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -537,9 +538,16 @@ VideoFrame upload_frames_to_gpu(graphics::VkContext &vk,
                                       static_cast<u32>(height), 1},
       });
   cmd_buf.end();
-  auto [sem, sem_value] = tx_pool.end(
-      std::move(cmd_buf), vk.get_queues().get_qf_transfer(), std::move(buffer),
-      {}, {}, vk::PipelineStageFlagBits2::eTransfer);
+  graphics::TimelineSemaphore sem{vk.get_device(), 0, "video_frame_tlsem"};
+  u64 sem_value = 1;
+  tx_pool.end2(std::move(cmd_buf), vk.get_queues().get_qf_transfer(),
+               std::move(buffer), {},
+               vk::SemaphoreSubmitInfo{
+                   .semaphore = *sem,
+                   .value = sem_value,
+                   .stageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+               },
+               vk::PipelineStageFlagBits2::eTransfer);
 
   std::vector<StructVideoFramePlaneData> planes;
   planes.emplace_back(StructVideoFramePlaneData{

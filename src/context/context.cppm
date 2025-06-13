@@ -1,7 +1,10 @@
+module;
+#include <cassert>
 export module vkvideo.context:context;
 
 import std;
 import vkfw;
+import vulkan_hpp;
 import vkvideo.core;
 import vkvideo.graphics;
 import vkvideo.medias;
@@ -24,31 +27,39 @@ struct ContextArgs {
   ///
   /// Preview mode will show a preview window, while render mode will just
   /// render the media file headlessly
-  DisplayMode mode;
+  DisplayMode mode = DisplayMode::Preview;
 
   // video-related properties
 
   /// \brief Video dimensions of the output media
-  i32 width, height;
+  i32 width = 640, height = 360;
 
   /// \brief Video frames per second
-  tp::ffmpeg::Rational fps;
+  tp::ffmpeg::Rational fps = tp::ffmpeg::Rational{1, 60};
 
   // audio-related properties
 
   /// \brief Sample rate (Hz, per channel)
-  i32 sample_rate;
+  i32 sample_rate = 44100;
 
   /// \brief Channel layout (currently mono and stereo is supported)
-  tp::ffmpeg::ChannelLayout ch_layout;
+  tp::ffmpeg::ChannelLayout ch_layout = tp::ffmpeg::ch_layout_stereo;
 
   /// \brief Sample format
-  tp::ffmpeg::SampleFormat sample_format;
+  tp::ffmpeg::SampleFormat sample_format =
+      tp::ffmpeg::SampleFormat::AV_SAMPLE_FMT_FLTP;
+
+  /// \brief Video and Audio codec (encoding)
+  tp::ffmpeg::Codec video_codec = nullptr, audio_codec = nullptr;
+
+  /// \brief Video pixel format
+  tp::ffmpeg::PixelFormat video_pixfmt =
+      tp::ffmpeg::PixelFormat::AV_PIX_FMT_NV12;
 
   /// \brief Path of the output media file
   ///
   /// This will be used as preview window title in preview mode
-  std::string render_output;
+  std::string render_output = "out.mkv";
 
 private:
   friend class Context;

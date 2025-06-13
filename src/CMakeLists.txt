@@ -26,6 +26,7 @@ target_sources(
             medias/video.cppm
             medias/video_frame.cppm
             medias/stream.cppm
+            medias/output.cppm
             medias/mod.cppm
             context/context.cppm
             context/avsync.cppm

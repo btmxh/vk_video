@@ -135,6 +135,10 @@ public:
   static Packet create() { return Packet{av_packet_alloc()}; }
 
   void unref() const { av_packet_unref(get()); }
+
+  void rescale_ts(AVRational tb_src, AVRational tb_dst) noexcept {
+    av_packet_rescale_ts(get(), tb_src, tb_dst);
+  }
 };
 
 class Frame : public std::unique_ptr<AVFrame, detail::FrameDeleter> {
@@ -272,6 +276,7 @@ private:
   std::unique_ptr<AVIOContext, detail::AVIOContextDeleter> avio;
 };
 
+using Stream = AVStream;
 using OutputFormat = const AVOutputFormat *;
 using Codec = const AVCodec *;
 
@@ -337,8 +342,11 @@ public:
   }
 
   // ENCODE
-  void send_frame(const Frame &frame) {
-    av_call(avcodec_send_frame(get(), frame.get()));
+  bool send_frame(const Frame &frame) {
+    int err = avcodec_send_frame(get(), frame.get());
+    if (err != 0 && err != AVERROR_EOF)
+      av_call(err);
+    return err == 0;
   }
 
   std::pair<Packet, RecvError> recv_packet(Packet &&packet = nullptr) {
@@ -469,6 +477,7 @@ using PixelFormatDescriptor = AVPixFmtDescriptor;
 
 enum class PixelFormatFlagBits : int {
   eRgb = AV_PIX_FMT_FLAG_RGB,
+  eBitstream = AV_PIX_FMT_FLAG_BITSTREAM,
   eHasAlpha = AV_PIX_FMT_FLAG_ALPHA,
 };
 

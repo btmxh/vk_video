@@ -276,17 +276,10 @@ int main(int argc, char *argv[]) {
   ffmpeg::Instance ffmpeg;
 
   Context context{ContextArgs{
-      .mode = DisplayMode::Preview,
-      .width = 640,
-      .height = 360,
-      .fps = {30, 1},
-      .sample_rate = 44100,
-      .ch_layout = ffmpeg::ch_layout_stereo,
-      .sample_format = AV_SAMPLE_FMT_S16,
-      .render_output = "output.mkv",
+      .mode = DisplayMode::Render,
   }};
 
-  auto video = context.open_video(argv[1], {});
+  auto video = context.open_video(argv[1], {.hwaccel = HWAccel::eOff});
 
   auto &vk = context.get_vulkan();
   vkr::CommandPool pool{
@@ -298,7 +291,7 @@ int main(int argc, char *argv[]) {
               static_cast<u32>(vk.get_queues().get_qf_graphics()),
       }};
 
-  auto fif_cnt = vk.get_swapchain_ctx()->num_fifs();
+  auto fif_cnt = vk.num_fifs();
   vkr::CommandBuffers cmd_bufs{
       vk.get_device(), vk::CommandBufferAllocateInfo{
                            .commandPool = *pool,
@@ -309,32 +302,23 @@ int main(int argc, char *argv[]) {
     auto name = std::format("cmd_buf[{}]", i);
     vk.set_debug_label(*cmd_bufs[i], name.c_str());
   }
-  std::vector<vkr::Semaphore> cmd_buf_start_sems;
   std::vector<TimelineSemaphore> cmd_buf_end_sems;
   std::vector<std::vector<UniqueAny>> cmd_buf_dependencies;
   std::vector<u64> cmd_buf_sem_values;
-  cmd_buf_start_sems.reserve(fif_cnt);
   cmd_buf_end_sems.reserve(fif_cnt);
   cmd_buf_dependencies.resize(fif_cnt);
   cmd_buf_sem_values.resize(fif_cnt);
   for (i32 i = 0; i < fif_cnt; ++i) {
-    auto name = std::format("cmd_buf_start_sems[{}]", i);
-    auto &start_sem = cmd_buf_start_sems.emplace_back(
-        vk.get_device(), vk::SemaphoreCreateInfo{});
-    vk.set_debug_label(*start_sem, name.c_str());
-    name = std::format("cmd_buf_end_sems[{}]", i);
+    auto name = std::format("cmd_buf_end_sems[{}]", i);
     cmd_buf_end_sems.emplace_back(vk.get_device(), 0, name.c_str());
   }
 
-  // TODO: support multi-plane formats
+  // FIXME: transition layout validation error on non-HWAccel GPU-assisted
+  // maybe related:
+  // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10185
   auto handle_transition = [&](LockedVideoFrameData &video_frame,
                                std::optional<i32> frame_idx) {
     for (auto &plane : video_frame.get_planes()) {
-      auto barrier = plane->image_barrier(
-          vk::PipelineStageFlagBits2::eFragmentShader,
-          vk::AccessFlagBits2::eShaderSampledRead,
-          vk::ImageLayout::eShaderReadOnlyOptimal,
-          static_cast<u32>(vk.get_queues().get_qf_graphics()));
 
       auto needs_ownership_transfer =
           plane->get_queue_family_idx() != vk.get_queues().get_qf_graphics() &&
@@ -344,21 +328,45 @@ int main(int argc, char *argv[]) {
       if (needs_ownership_transfer) {
         // transfer release
         {
+          vk::ImageMemoryBarrier2 barrier{
+              .srcStageMask = plane->get_stage_flag(),
+              .srcAccessMask = plane->get_access_flag(),
+              .dstStageMask = vk::PipelineStageFlagBits2::eNone,
+              .dstAccessMask = vk::AccessFlagBits2::eNone,
+              .oldLayout = plane->get_image_layout(),
+              .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+              .srcQueueFamilyIndex = plane->get_queue_family_idx(),
+              .dstQueueFamilyIndex = vk.get_queues().get_qf_graphics(),
+              .image = plane->get_image(),
+              .subresourceRange = plane->get_subresource_range(),
+          };
           auto cmd_buf =
-              vk.get_temp_pools().begin(vk.get_queues().get_qf_transfer());
+              vk.get_temp_pools().begin(plane->get_queue_family_idx());
           cmd_buf.begin(vk::CommandBufferBeginInfo{
               .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
           cmd_buf.pipelineBarrier2(
               vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
           cmd_buf.end();
-          vk.get_temp_pools().end(
-              std::move(cmd_buf), vk.get_queues().get_qf_transfer(), {},
-              plane->wait_sem_info(), plane->signal_sem_info());
+          vk.get_temp_pools().end2(
+              std::move(cmd_buf), plane->get_queue_family_idx(), {},
+              plane->wait_sem_info(),
+              plane->signal_sem_info(vk::PipelineStageFlagBits2::eAllCommands));
         }
         plane->set_semaphore_value(plane->get_semaphore_value() + 1);
-        plane->set_stage_flag(vk::PipelineStageFlagBits2::eBottomOfPipe);
         // graphics acquire
         {
+          vk::ImageMemoryBarrier2 barrier{
+              .srcStageMask = vk::PipelineStageFlagBits2::eNone,
+              .srcAccessMask = vk::AccessFlagBits2::eNone,
+              .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+              .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+              .oldLayout = plane->get_image_layout(),
+              .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+              .srcQueueFamilyIndex = plane->get_queue_family_idx(),
+              .dstQueueFamilyIndex = vk.get_queues().get_qf_graphics(),
+              .image = plane->get_image(),
+              .subresourceRange = plane->get_subresource_range(),
+          };
           auto cmd_buf =
               vk.get_temp_pools().begin(vk.get_queues().get_qf_graphics());
           cmd_buf.begin(vk::CommandBufferBeginInfo{
@@ -366,12 +374,19 @@ int main(int argc, char *argv[]) {
           cmd_buf.pipelineBarrier2(
               vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
           cmd_buf.end();
-          vk.get_temp_pools().end(
+          vk.get_temp_pools().end2(
               std::move(cmd_buf), vk.get_queues().get_qf_graphics(), {},
-              plane->wait_sem_info(), plane->signal_sem_info());
+              plane->wait_sem_info(),
+              plane->signal_sem_info(
+                  vk::PipelineStageFlagBits2::eFragmentShader));
+          plane->commit_image_barrier(barrier);
         }
-        plane->commit_image_barrier(barrier);
       } else if (needs_layout_transition) {
+        auto barrier = plane->image_barrier(
+            vk::PipelineStageFlagBits2::eFragmentShader,
+            vk::AccessFlagBits2::eShaderSampledRead,
+            vk::ImageLayout::eShaderReadOnlyOptimal,
+            static_cast<u32>(vk.get_queues().get_qf_graphics()));
         auto cmd_buf =
             vk.get_temp_pools().begin(vk.get_queues().get_qf_graphics());
         cmd_buf.begin(vk::CommandBufferBeginInfo{
@@ -379,9 +394,10 @@ int main(int argc, char *argv[]) {
         cmd_buf.pipelineBarrier2(
             vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
         cmd_buf.end();
-        vk.get_temp_pools().end(
-            std::move(cmd_buf), vk.get_queues().get_qf_graphics(), {},
-            plane->wait_sem_info(), plane->signal_sem_info());
+        vk.get_temp_pools().end2(std::move(cmd_buf),
+                                 vk.get_queues().get_qf_graphics(), {},
+                                 plane->wait_sem_info(),
+                                 plane->signal_sem_info(barrier.dstStageMask));
         plane->commit_image_barrier(barrier);
       }
     }
@@ -403,21 +419,20 @@ int main(int argc, char *argv[]) {
 
   context.open_audio(argv[1]);
 
-  for (i32 i = 0; context.alive(); ++i) {
+  for (i32 i = 0; i < 1 && context.alive(); ++i) {
     context.update();
 
-    auto &present = *context.get_vulkan().get_swapchain_ctx();
-    auto frame = present.begin_frame();
+    auto frame = vk.get_render_target().begin_frame();
 
     cmd_buf_end_sems[frame.fif_idx].wait(cmd_buf_sem_values[frame.fif_idx],
                                          std::numeric_limits<i64>::max());
     // once work is done, we can free all dependencies
     cmd_buf_dependencies[frame.fif_idx].clear();
-    if (auto image_opt = frame.acquire_image(std::numeric_limits<i64>::max());
-        image_opt.has_value()) {
-      auto [image_idx, image, image_view, image_size, image_format,
-            image_present_sem] = image_opt.value();
-      auto video_frame = video->get_frame(context.get_time());
+    if (auto acq_frame_opt =
+            frame.acquire_image(std::numeric_limits<i64>::max());
+        acq_frame_opt.has_value()) {
+      auto acq_frame = acq_frame_opt.value();
+      auto video_frame = video->get_frame(0);
       auto locked_frame_data =
           video_frame.transform([](auto &frame) { return frame.data->lock(); });
       auto planes =
@@ -430,7 +445,7 @@ int main(int argc, char *argv[]) {
                              return plane->get_format();
                            }) |
                            std::ranges::to<std::vector>(),
-          .color_attachment_format = image_format,
+          .color_attachment_format = acq_frame.format,
           .pixel_format = video_frame.has_value() ? video_frame->frame_format
                                                   : AV_PIX_FMT_NONE,
       });
@@ -441,7 +456,12 @@ int main(int argc, char *argv[]) {
           std::ranges::to<std::vector>();
 
       if (video_frame.has_value()) {
+        std::println(
+            "{}",
+            locked_frame_data.value()->get_planes()[0]->get_semaphore_value());
         handle_transition(**locked_frame_data, video_frame->frame_index);
+        vk.get_device().waitIdle();
+        std::println("{}", (void *)planes[0]->get_image());
 
         vk::DescriptorImageInfo desc_sampler{
             .sampler = pipeline->sampler,
@@ -469,7 +489,7 @@ int main(int argc, char *argv[]) {
       // transition: eUndefined -> eTransferDstOptimal
       {
         vk::ImageMemoryBarrier2 sc_img_trans{
-            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+            .srcStageMask = vk::PipelineStageFlagBits2::eNone,
             .srcAccessMask = vk::AccessFlagBits2::eNone,
             .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite |
@@ -478,7 +498,7 @@ int main(int argc, char *argv[]) {
             .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
             .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
             .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-            .image = image,
+            .image = acq_frame.image,
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .levelCount = 1,
@@ -490,7 +510,7 @@ int main(int argc, char *argv[]) {
 
       // here we use the huge ass graphics pipeline
       vk::RenderingAttachmentInfo color_attachment{
-          .imageView = image_view,
+          .imageView = acq_frame.view,
           .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
           .loadOp = vk::AttachmentLoadOp::eClear,
           .storeOp = vk::AttachmentStoreOp::eStore,
@@ -499,22 +519,22 @@ int main(int argc, char *argv[]) {
           }},
       };
       cmd_buf.beginRendering(vk::RenderingInfo{
-          .renderArea = {{0, 0}, image_size},
+          .renderArea = {{0, 0}, acq_frame.extent},
           .layerCount = 1,
       }
                                  .setColorAttachments(color_attachment));
       if (locked_frame_data.has_value()) {
         auto &data = **locked_frame_data;
-        cmd_buf.setViewport(0,
-                            vk::Viewport{
-                                .x = 0,
-                                .y = 0,
-                                .width = static_cast<float>(image_size.width),
-                                .height = static_cast<float>(image_size.height),
-                            });
+        cmd_buf.setViewport(
+            0, vk::Viewport{
+                   .x = 0,
+                   .y = 0,
+                   .width = static_cast<float>(acq_frame.extent.width),
+                   .height = static_cast<float>(acq_frame.extent.height),
+               });
         cmd_buf.setScissor(0, vk::Rect2D{
                                   .offset = {0, 0},
-                                  .extent = image_size,
+                                  .extent = acq_frame.extent,
                               });
         cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              pipeline->pipeline);
@@ -542,18 +562,19 @@ int main(int argc, char *argv[]) {
       cmd_buf.endRendering();
 
       // transition: eTransferDstOptimal -> ePresentSrcKHR
-      {
+      if (auto present_layout = vk.get_render_target().present_layout();
+          present_layout.has_value()) {
         vk::ImageMemoryBarrier2 sc_img_trans{
             .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite |
                              vk::AccessFlagBits2::eColorAttachmentRead,
-            .dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
+            .dstStageMask = vk::PipelineStageFlagBits2::eNone,
             .dstAccessMask = vk::AccessFlagBits2::eNone,
             .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .newLayout = vk::ImageLayout::ePresentSrcKHR,
+            .newLayout = *present_layout,
             .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
             .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-            .image = image,
+            .image = acq_frame.image,
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .levelCount = 1,
@@ -570,26 +591,26 @@ int main(int argc, char *argv[]) {
         };
         std::vector<vk::SemaphoreSubmitInfo> wait_sem_info{
             {
-                .semaphore = frame.image_acq_sem,
-                .stageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+                .semaphore = acq_frame.image_acquire_sem,
+                .stageMask = vk::PipelineStageFlagBits2::eNone,
             },
         };
         std::vector<vk::SemaphoreSubmitInfo> sig_sem_info{
             {
                 .semaphore = cmd_buf_end_sems[frame.fif_idx],
                 .value = ++cmd_buf_sem_values[frame.fif_idx],
-                .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
+                .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
             },
             {
-                .semaphore = image_present_sem,
-                .stageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
+                .semaphore = acq_frame.image_present_sem,
+                .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
             },
         };
         for (auto &plane : planes) {
-          wait_sem_info.push_back(plane->wait_sem_info());
-          auto new_sem_value =
-              sig_sem_info.emplace_back(plane->signal_sem_info()).value;
-          plane->set_semaphore_value(new_sem_value);
+          auto wi = plane->wait_sem_info();
+          wait_sem_info.push_back(wi);
+          std::println("{} {} {:x}", (void *)wi.semaphore, wi.value,
+                       static_cast<u64>(wi.stageMask));
         }
 
         {
@@ -608,7 +629,7 @@ int main(int argc, char *argv[]) {
         cmd_buf_dependencies[frame.fif_idx].push_back(std::move(pipeline));
       }
 
-      present.end_frame(vk.get_queues(), image_idx, {});
+      vk.get_render_target().end_frame(vk.get_queues(), acq_frame, {});
     }
   }
 
