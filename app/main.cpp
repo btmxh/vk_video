@@ -456,12 +456,7 @@ int main(int argc, char *argv[]) {
           std::ranges::to<std::vector>();
 
       if (video_frame.has_value()) {
-        std::println(
-            "{}",
-            locked_frame_data.value()->get_planes()[0]->get_semaphore_value());
         handle_transition(**locked_frame_data, video_frame->frame_index);
-        vk.get_device().waitIdle();
-        std::println("{}", (void *)planes[0]->get_image());
 
         vk::DescriptorImageInfo desc_sampler{
             .sampler = pipeline->sampler,
@@ -607,10 +602,7 @@ int main(int argc, char *argv[]) {
             },
         };
         for (auto &plane : planes) {
-          auto wi = plane->wait_sem_info();
-          wait_sem_info.push_back(wi);
-          std::println("{} {} {:x}", (void *)wi.semaphore, wi.value,
-                       static_cast<u64>(wi.stageMask));
+          wait_sem_info.push_back(plane->wait_sem_info());
         }
 
         {
