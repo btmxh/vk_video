@@ -1,5 +1,8 @@
 add_library(vkvideo)
 
+add_shaders(vkvideo_fullscreen_shaders medias/fullscreen.vert medias/fullscreen.frag)
+add_dependencies(vkvideo vkvideo_fullscreen_shaders)
+
 target_sources(
     vkvideo
     PUBLIC
@@ -27,6 +30,7 @@ target_sources(
             medias/video_frame.cppm
             medias/stream.cppm
             medias/output.cppm
+            medias/pipeline.cppm
             medias/mod.cppm
             context/context.cppm
             context/avsync.cppm

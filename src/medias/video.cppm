@@ -17,6 +17,26 @@ import vkvideo.graphics;
 import :video_frame;
 import :stream;
 
+namespace vkvideo::medias {
+inline bool is_webp_path(std::string_view path) {
+  std::ifstream file(path.data(), std::ios::binary);
+  if (!file) {
+    return false;
+  }
+
+  std::array<unsigned char, 12> header{};
+  if (!file.read(reinterpret_cast<char *>(header.data()), header.size())) {
+    return false;
+  }
+
+  // Check for RIFF + 4 unknown bytes + WEBPVP8
+  return header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 &&
+         header[3] == 0x46 && header[8] == 0x57 && header[9] == 0x45 &&
+         header[10] == 0x42 && header[11] == 0x50;
+}
+
+} // namespace vkvideo::medias
+
 export namespace vkvideo::medias {
 
 class Video {
@@ -176,5 +196,104 @@ private:
   i32 last_frame_idx = 0;
   tp::ffmpeg::PixelFormat format;
 };
+
+enum class DecoderType {
+  eAuto = 0, // libwebp if is webp file, ffmpeg otherwise
+  eFFmpeg,
+  eLibWebP,
+};
+
+enum class DecodeMode {
+  eAuto = 0,
+  eStream,  // stream the file (for large media files)
+  eReadAll, // read everything to RAM/VRAM (for small media clips)
+};
+
+struct VideoArgs {
+  DecoderType type = DecoderType::eAuto;
+  medias::HWAccel hwaccel = medias::HWAccel::eAuto;
+  DecodeMode mode = DecodeMode::eAuto;
+};
+
+std::unique_ptr<Video> open_video(graphics::VkContext &vk,
+                                  std::string_view path,
+                                  const VideoArgs &args = {}) {
+  DecoderType type = args.type;
+  if (type == DecoderType::eAuto) {
+    type = is_webp_path(path) ? DecoderType::eLibWebP : DecoderType::eFFmpeg;
+  }
+
+  DecodeMode mode = args.mode;
+  // 16 MiB
+  constexpr static std::size_t READ_ALL_THRESHOLD = std::size_t{16} << 20;
+
+  std::unique_ptr<medias::Stream> stream;
+  // TODO: respect the VKVIDEO_HAVE_WEBP flag
+  switch (type) {
+  case DecoderType::eFFmpeg: {
+    medias::RawFFmpegStream raw_ffmpeg_stream{path,
+                                              tp::ffmpeg::MediaType::Video};
+    if (mode == DecodeMode::eAuto) {
+      mode = raw_ffmpeg_stream.est_vram_bytes().value_or(
+                 std::numeric_limits<std::size_t>::max()) <= READ_ALL_THRESHOLD
+                 ? DecodeMode::eReadAll
+                 : DecodeMode::eStream;
+    }
+
+    auto hwaccel = args.hwaccel;
+    if (mode == DecodeMode::eReadAll) {
+      if (hwaccel == medias::HWAccel::eOn)
+        std::println(
+            std::cerr,
+            "Hardware-acceleration is not supported for read-all decode mode");
+      hwaccel = medias::HWAccel::eOff;
+    } else {
+      if (hwaccel == medias::HWAccel::eAuto)
+        hwaccel = medias::HWAccel::eOn;
+    }
+
+    stream = std::make_unique<medias::FFmpegStream>(
+        std::move(raw_ffmpeg_stream), vk.get_hwaccel_ctx(), hwaccel);
+    break;
+  }
+  case DecoderType::eLibWebP: {
+    std::ifstream input{path.data(), std::ios::binary};
+    input.exceptions(std::ios::failbit | std::ios::badbit);
+    std::vector<char> webp_data(std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{});
+    if (mode == DecodeMode::eAuto) {
+      tp::webp::Demuxer demuxer{std::span<const u8>{
+          reinterpret_cast<const u8 *>(webp_data.data()),
+          reinterpret_cast<const u8 *>(webp_data.data() + webp_data.size())}};
+      // currently we are not handling anything special with non-RGBA formats
+      auto est_bytes = static_cast<std::size_t>(demuxer.num_frames()) *
+                       demuxer.width() * demuxer.height() * 4;
+      mode = est_bytes <= READ_ALL_THRESHOLD ? DecodeMode::eReadAll
+                                             : DecodeMode::eStream;
+    }
+
+    if (args.hwaccel == medias::HWAccel::eOn) {
+      std::println(
+          std::cerr,
+          "Hardware acceleration is not supported for libwebp decoder");
+    }
+
+    stream = std::make_unique<medias::AnimWebPStream>(std::move(webp_data));
+    break;
+  }
+  default:
+    throw std::runtime_error{"Invalid decoder type"};
+  }
+
+  switch (mode) {
+  case DecodeMode::eStream:
+    return std::make_unique<medias::VideoStream>(std::move(stream), vk);
+  case DecodeMode::eReadAll:
+    return std::make_unique<medias::VideoVRAM>(*stream, vk);
+  default:;
+  }
+
+  throw std::runtime_error{"Invalid decode mode"};
+}
 
 } // namespace vkvideo::medias

@@ -545,7 +545,7 @@ VideoFrame upload_frames_to_gpu(graphics::VkContext &vk,
                vk::SemaphoreSubmitInfo{
                    .semaphore = *sem,
                    .value = sem_value,
-                   .stageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+                   .stageMask = vk::PipelineStageFlagBits2::eTransfer,
                },
                vk::PipelineStageFlagBits2::eTransfer);
 

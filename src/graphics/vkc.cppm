@@ -472,46 +472,6 @@ public:
     queues.init(device, qf_graphics, qf_compute, qf_transfer,
                 std::move(video_qf_indices));
     tx_pool.init(device, queues);
-
-    static constexpr i32 DEFAULT_FIF_COUNT = 3;
-    if (!headless) {
-      auto img_provider = std::make_unique<SwapchainRenderTargetImageProvider>(
-          physical_device, device, window, surface, DEFAULT_FIF_COUNT);
-      render_target =
-          std::make_unique<RenderTarget>(device, std::move(img_provider));
-    } else {
-      auto [width, height] = window.getSize();
-      auto img_provider = std::make_unique<HeadlessRenderTargetImageProvider>(
-          queues, tx_pool, *allocator, device, DEFAULT_FIF_COUNT,
-          vk::Format::eR8G8B8A8Unorm,
-          vk::Extent2D{static_cast<u32>(width), static_cast<u32>(height)},
-          vk::ImageUsageFlagBits::eColorAttachment,
-          [this](i32 image_idx, std::span<vk::Semaphore> wait_sems,
-                 vk::Semaphore image_acquire_sem) {
-            auto cmd = tx_pool.begin(queues.get_qf_graphics());
-            cmd.begin(vk::CommandBufferBeginInfo{
-                .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-            });
-            cmd.end();
-            auto wait_sem_infos =
-                wait_sems |
-                std::ranges::views::transform([](vk::Semaphore sem) {
-                  return vk::SemaphoreSubmitInfo{
-                      .semaphore = sem,
-                      .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
-                  };
-                }) |
-                std::ranges::to<std::vector>();
-            tx_pool.end2(
-                std::move(cmd), queues.get_qf_graphics(), {}, wait_sem_infos,
-                vk::SemaphoreSubmitInfo{
-                    .semaphore = image_acquire_sem,
-                    .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
-                });
-          });
-      render_target =
-          std::make_unique<RenderTarget>(device, std::move(img_provider));
-    }
   }
 
   VkContext(const VkContext &) = delete;
@@ -525,14 +485,12 @@ public:
   vk::raii::Instance &get_instance() { return instance; }
   vk::raii::Device &get_device() { return device; }
   vk::raii::PhysicalDevice &get_physical_device() { return physical_device; }
+  vk::raii::SurfaceKHR &get_surface() { return surface; }
   vma::Allocator &get_vma_allocator() { return *allocator; }
 
   const tp::ffmpeg::BufferRef &get_hwaccel_ctx() const { return hwdevice_ctx; }
   QueueManager &get_queues() { return queues; }
   TempCommandPools &get_temp_pools() { return tx_pool; }
-  RenderTarget &get_render_target() { return *render_target; }
-
-  i32 num_fifs() { return render_target->num_fifs(); }
 
   void set_debug_label(VulkanHandle handle, const char *name) {
     ::vkvideo::graphics::set_debug_label(device, handle, name);
@@ -556,7 +514,7 @@ private:
 
   QueueManager queues;
   TempCommandPools tx_pool;
-  std::unique_ptr<RenderTarget> render_target = nullptr;
+  // std::unique_ptr<RenderTarget> render_target = nullptr;
 };
 
 } // namespace vkvideo::graphics
