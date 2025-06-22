@@ -21,7 +21,6 @@ target_sources(
             graphics/tlsem.cppm
             graphics/queues.cppm
             graphics/tx.cppm
-            graphics/swapchain.cppm
             graphics/vkc.cppm
             graphics/mod.cppm
             medias/stb_image_write.cppm

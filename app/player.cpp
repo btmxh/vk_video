@@ -45,31 +45,125 @@ int main(int argc, char *argv[]) {
               static_cast<u32>(vk.get_queues().get_qf_graphics()),
       }};
 
-  auto render_target = [&]() {
-    auto swapchain = std::make_unique<SwapchainRenderTargetImageProvider>(
-        vk.get_physical_device(), vk.get_device(), *window, *vk.get_surface(),
-        3);
-    return RenderTarget{vk.get_device(), std::move(swapchain)};
-  }();
+  vk::raii::SwapchainKHR swapchain = nullptr;
+  vk::Format swapchain_format;
+  vk::Extent2D swapchain_extent;
+  std::vector<vk::Image> swapchain_images;
+  std::vector<vk::raii::ImageView> swapchain_image_views;
+  std::vector<vk::raii::Semaphore> image_present_sems;
 
-  auto fif_cnt = render_target.num_fifs();
+  auto recreate_swapchain = [&]() {
+    auto [width, height] = window->getFramebufferSize();
+    auto &pd = vk.get_physical_device();
+    auto caps = pd.getSurfaceCapabilitiesKHR(vk.get_surface());
+    auto img_count = std::min(caps.minImageCount + 1, caps.maxImageCount);
+    auto formats = pd.getSurfaceFormatsKHR(vk.get_surface());
+    auto format = formats[0];
+    if (auto it = std::find_if(formats.begin(), formats.end(),
+                               [&](const auto format) {
+                                 return format.format ==
+                                            vk::Format::eB8G8R8A8Unorm &&
+                                        format.colorSpace ==
+                                            vk::ColorSpaceKHR::eSrgbNonlinear;
+                               });
+        it != formats.end())
+      format = *it;
+
+    swapchain = vk::raii::SwapchainKHR{
+        vk.get_device(),
+        vk::SwapchainCreateInfoKHR{
+            .surface = vk.get_surface(),
+            .minImageCount = img_count,
+            .imageFormat = swapchain_format = format.format,
+            .imageColorSpace = format.colorSpace,
+            .imageExtent = swapchain_extent =
+                {
+                    .width = std::clamp(static_cast<u32>(width),
+                                        caps.minImageExtent.width,
+                                        caps.maxImageExtent.width),
+                    .height = std::clamp(static_cast<u32>(height),
+                                         caps.minImageExtent.height,
+                                         caps.maxImageExtent.height),
+                },
+            .imageArrayLayers = 1,
+            .imageUsage = vk::ImageUsageFlagBits::eTransferDst |
+                          vk::ImageUsageFlagBits::eColorAttachment,
+            .imageSharingMode = vk::SharingMode::eExclusive,
+            .preTransform = caps.currentTransform,
+            .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+            .presentMode = vk::PresentModeKHR::eFifo,
+            .clipped = true,
+            .oldSwapchain = *swapchain,
+        }};
+
+    swapchain_images = swapchain.getImages();
+
+    swapchain_image_views.clear();
+    swapchain_image_views.reserve(swapchain_images.size());
+
+    image_present_sems.clear();
+    image_present_sems.reserve(swapchain_images.size());
+
+    for (std::size_t i = 0; i < swapchain_images.size(); ++i) {
+      auto image = swapchain_images[i];
+      auto name = std::format("swapchain_images[{}]", i);
+      vk.set_debug_label(image, name.c_str());
+      auto &image_view = swapchain_image_views.emplace_back(
+          vk.get_device(),
+          vk::ImageViewCreateInfo{
+              .image = image,
+              .viewType = vk::ImageViewType::e2D,
+              .format = swapchain_format,
+              .components =
+                  {
+                      vk::ComponentSwizzle::eIdentity,
+                      vk::ComponentSwizzle::eIdentity,
+                      vk::ComponentSwizzle::eIdentity,
+                      vk::ComponentSwizzle::eIdentity,
+                  },
+              .subresourceRange =
+                  {
+                      .aspectMask = vk::ImageAspectFlagBits::eColor,
+                      .levelCount = 1,
+                      .layerCount = 1,
+                  },
+          });
+      name = std::format("swapchain_image_views[{}]", i);
+      set_debug_label(vk.get_device(), *image_view, name.c_str());
+
+      image_present_sems.emplace_back(vk.get_device(),
+                                      vk::SemaphoreCreateInfo{});
+    }
+  };
+  recreate_swapchain();
+
+  // num of frames-in-flight
+  static constexpr i32 FIF_CNT = 3;
+  std::vector<vk::raii::Semaphore> image_acquire_sems;
+  image_acquire_sems.reserve(FIF_CNT);
+  for (i32 i = 0; i < FIF_CNT; ++i) {
+    auto img_acq_sem = *image_acquire_sems.emplace_back(
+        vk.get_device(), vk::SemaphoreCreateInfo{});
+    auto name = std::format("image_acquire_sems[{}]", i);
+    vk.set_debug_label(img_acq_sem, name.c_str());
+  }
   vkr::CommandBuffers cmd_bufs{
       vk.get_device(), vk::CommandBufferAllocateInfo{
                            .commandPool = *pool,
                            .level = vk::CommandBufferLevel::ePrimary,
-                           .commandBufferCount = static_cast<u32>(fif_cnt),
+                           .commandBufferCount = static_cast<u32>(FIF_CNT),
                        }};
-  for (i32 i = 0; i < fif_cnt; ++i) {
+  for (i32 i = 0; i < FIF_CNT; ++i) {
     auto name = std::format("gfx_cmd_buf[{}]", i);
     vk.set_debug_label(*cmd_bufs[i], name.c_str());
   }
   std::vector<TimelineSemaphore> cmd_buf_end_sems;
   std::vector<std::vector<UniqueAny>> cmd_buf_dependencies;
   std::vector<u64> cmd_buf_sem_values;
-  cmd_buf_end_sems.reserve(fif_cnt);
-  cmd_buf_dependencies.resize(fif_cnt);
-  cmd_buf_sem_values.resize(fif_cnt);
-  for (i32 i = 0; i < fif_cnt; ++i) {
+  cmd_buf_end_sems.reserve(FIF_CNT);
+  cmd_buf_dependencies.resize(FIF_CNT);
+  cmd_buf_sem_values.resize(FIF_CNT);
+  for (i32 i = 0; i < FIF_CNT; ++i) {
     auto name = std::format("gfx_cmd_buf_end_sems[{}]", i);
     cmd_buf_end_sems.emplace_back(vk.get_device(), 0, name.c_str());
   }
@@ -171,15 +265,14 @@ int main(int argc, char *argv[]) {
     vkfw::pollEvents();
     vk.get_temp_pools().garbage_collect();
 
-    auto frame = render_target.begin_frame();
-    cmd_buf_end_sems[frame.fif_idx].wait(cmd_buf_sem_values[frame.fif_idx],
-                                         std::numeric_limits<i64>::max());
+    auto fif_idx = i % FIF_CNT;
+    cmd_buf_end_sems[fif_idx].wait(cmd_buf_sem_values[fif_idx],
+                                   std::numeric_limits<i64>::max());
     // once work is done, we can free all dependencies
-    cmd_buf_dependencies[frame.fif_idx].clear();
-    if (auto acq_frame_opt =
-            frame.acquire_image(std::numeric_limits<i64>::max());
-        acq_frame_opt.has_value()) {
-      auto acq_frame = acq_frame_opt.value();
+    cmd_buf_dependencies[fif_idx].clear();
+    try {
+      auto [result, img_idx] = swapchain.acquireNextImage(
+          std::numeric_limits<u64>::max(), image_acquire_sems[fif_idx]);
       auto video_frame = video->get_frame(clock.get_time());
       auto locked_frame_data =
           video_frame.transform([](auto &frame) { return frame.data->lock(); });
@@ -194,18 +287,17 @@ int main(int argc, char *argv[]) {
                     return plane->get_format();
                   }) |
                   std::ranges::to<std::vector>(),
-              .color_attachment_format = acq_frame.format,
+              .color_attachment_format = swapchain_format,
               .pixel_format = video_frame.has_value()
                                   ? video_frame->frame_format
                                   : AV_PIX_FMT_NONE,
           },
-          vk.get_device(), fif_cnt);
+          vk.get_device(), FIF_CNT);
       auto views =
           planes | std::ranges::views::transform([&](const auto &plane) {
             return pipeline->create_image_view(vk.get_device(), *plane);
           }) |
           std::ranges::to<std::vector>();
-
       if (video_frame.has_value()) {
         handle_transition(**locked_frame_data, video_frame->frame_index);
 
@@ -218,7 +310,7 @@ int main(int argc, char *argv[]) {
         // update desc set
         vk.get_device().updateDescriptorSets(
             vk::WriteDescriptorSet{
-                .dstSet = *pipeline->descriptor_sets[frame.fif_idx],
+                .dstSet = *pipeline->descriptor_sets[fif_idx],
                 .dstBinding = 0,
                 .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eCombinedImageSampler,
@@ -228,7 +320,7 @@ int main(int argc, char *argv[]) {
       }
 
       // record cmdbuf
-      auto &cmd_buf = cmd_bufs[frame.fif_idx];
+      auto &cmd_buf = cmd_bufs[fif_idx];
       cmd_buf.begin(vk::CommandBufferBeginInfo{
           .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
@@ -244,7 +336,7 @@ int main(int argc, char *argv[]) {
             .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
             .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
             .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-            .image = acq_frame.image,
+            .image = swapchain_images[img_idx],
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .levelCount = 1,
@@ -256,7 +348,7 @@ int main(int argc, char *argv[]) {
 
       // here we use the huge ass graphics pipeline
       vk::RenderingAttachmentInfo color_attachment{
-          .imageView = acq_frame.view,
+          .imageView = swapchain_image_views[img_idx],
           .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
           .loadOp = vk::AttachmentLoadOp::eClear,
           .storeOp = vk::AttachmentStoreOp::eStore,
@@ -265,7 +357,7 @@ int main(int argc, char *argv[]) {
           }},
       };
       cmd_buf.beginRendering(vk::RenderingInfo{
-          .renderArea = {{0, 0}, acq_frame.extent},
+          .renderArea = {{0, 0}, swapchain_extent},
           .layerCount = 1,
       }
                                  .setColorAttachments(color_attachment));
@@ -275,18 +367,18 @@ int main(int argc, char *argv[]) {
             0, vk::Viewport{
                    .x = 0,
                    .y = 0,
-                   .width = static_cast<float>(acq_frame.extent.width),
-                   .height = static_cast<float>(acq_frame.extent.height),
+                   .width = static_cast<float>(swapchain_extent.width),
+                   .height = static_cast<float>(swapchain_extent.height),
                });
         cmd_buf.setScissor(0, vk::Rect2D{
                                   .offset = {0, 0},
-                                  .extent = acq_frame.extent,
+                                  .extent = swapchain_extent,
                               });
         cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              pipeline->pipeline);
-        cmd_buf.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics, pipeline->pipeline_layout, 0,
-            *pipeline->descriptor_sets[frame.fif_idx], {});
+        cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                   pipeline->pipeline_layout, 0,
+                                   *pipeline->descriptor_sets[fif_idx], {});
         auto [width, height] = data.get_extent();
         auto [padded_width, padded_height] = data.get_padded_extent();
         cmd_buf.pushConstants<FrameInfoPushConstants>(
@@ -319,7 +411,7 @@ int main(int argc, char *argv[]) {
             .newLayout = vk::ImageLayout::ePresentSrcKHR,
             .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
             .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-            .image = acq_frame.image,
+            .image = swapchain_images[img_idx],
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .levelCount = 1,
@@ -336,18 +428,18 @@ int main(int argc, char *argv[]) {
         };
         std::vector<vk::SemaphoreSubmitInfo> wait_sem_info{
             {
-                .semaphore = acq_frame.image_acquire_sem,
+                .semaphore = image_acquire_sems[fif_idx],
                 .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
             },
         };
         std::vector<vk::SemaphoreSubmitInfo> sig_sem_info{
             {
-                .semaphore = cmd_buf_end_sems[frame.fif_idx],
-                .value = ++cmd_buf_sem_values[frame.fif_idx],
+                .semaphore = cmd_buf_end_sems[fif_idx],
+                .value = ++cmd_buf_sem_values[fif_idx],
                 .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
             },
             {
-                .semaphore = acq_frame.image_present_sem,
+                .semaphore = image_present_sems[img_idx],
                 .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
             },
         };
@@ -366,15 +458,24 @@ int main(int argc, char *argv[]) {
                                      .setSignalSemaphoreInfos(sig_sem_info));
         }
 
-        cmd_buf_dependencies[frame.fif_idx].push_back(std::move(video_frame));
-        cmd_buf_dependencies[frame.fif_idx].push_back(std::move(views));
+        cmd_buf_dependencies[fif_idx].push_back(std::move(video_frame));
+        cmd_buf_dependencies[fif_idx].push_back(std::move(views));
         // for now the pipeline is cached indefinitely, but if we use some
         // strategy like LRU caching, we must ensure that the pipeline live at
         // least as long as command buffer execution
-        cmd_buf_dependencies[frame.fif_idx].push_back(std::move(pipeline));
+        cmd_buf_dependencies[fif_idx].push_back(std::move(pipeline));
       }
 
-      render_target.end_frame(vk.get_queues(), acq_frame, {});
+      {
+        auto [p_lock, present_queue] = vk.get_queues().get_graphics_queue();
+        auto result = present_queue.presentKHR(
+            vk::PresentInfoKHR{}
+                .setWaitSemaphores(*image_present_sems[img_idx])
+                .setImageIndices(img_idx)
+                .setSwapchains(*swapchain));
+      }
+    } catch (vk::OutOfDateKHRError) {
+      recreate_swapchain();
     }
   }
 

@@ -20,7 +20,6 @@ import vkvideo.core;
 import vkvideo.third_party;
 import :queues;
 import :temppools;
-import :swapchain;
 import :vku;
 
 export namespace vkvideo::graphics {
