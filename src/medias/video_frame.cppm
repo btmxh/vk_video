@@ -169,6 +169,90 @@ public:
   virtual std::pair<i32, i32> get_extent() const = 0;
 
   virtual std::pair<i32, i32> get_padded_extent() const { return get_extent(); }
+
+  // FIXME: transition layout validation error on HWAccel GPU-assisted
+  // maybe related:
+  // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10185
+  void layout_transition(std::optional<i32> frame_idx, u32 dst_queue_family_idx,
+                         graphics::TempCommandPools &temp_pools) {
+    for (auto &plane : get_planes()) {
+      auto needs_ownership_transfer =
+          plane->get_queue_family_idx() != dst_queue_family_idx &&
+          plane->get_queue_family_idx() != vk::QueueFamilyIgnored;
+      auto needs_layout_transition =
+          plane->get_image_layout() != vk::ImageLayout::eShaderReadOnlyOptimal;
+      if (needs_ownership_transfer) {
+        // transfer release
+        {
+          vk::ImageMemoryBarrier2 barrier{
+              .srcStageMask = plane->get_stage_flag(),
+              .srcAccessMask = plane->get_access_flag(),
+              .dstStageMask = vk::PipelineStageFlagBits2::eNone,
+              .dstAccessMask = vk::AccessFlagBits2::eNone,
+              .oldLayout = plane->get_image_layout(),
+              .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+              .srcQueueFamilyIndex = plane->get_queue_family_idx(),
+              .dstQueueFamilyIndex = dst_queue_family_idx,
+              .image = plane->get_image(),
+              .subresourceRange = plane->get_subresource_range(),
+          };
+          auto cmd_buf = temp_pools.begin(plane->get_queue_family_idx());
+          cmd_buf.begin(vk::CommandBufferBeginInfo{
+              .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+          cmd_buf.pipelineBarrier2(
+              vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+          cmd_buf.end();
+          temp_pools.end2(
+              std::move(cmd_buf), plane->get_queue_family_idx(), {},
+              plane->wait_sem_info(),
+              plane->signal_sem_info(vk::PipelineStageFlagBits2::eAllCommands));
+        }
+        plane->set_semaphore_value(plane->get_semaphore_value() + 1);
+        plane->set_stage_flag(vk::PipelineStageFlagBits2::eAllCommands);
+        // graphics acquire
+        {
+          vk::ImageMemoryBarrier2 barrier{
+              .srcStageMask = vk::PipelineStageFlagBits2::eNone,
+              .srcAccessMask = vk::AccessFlagBits2::eNone,
+              .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+              .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+              .oldLayout = plane->get_image_layout(),
+              .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+              .srcQueueFamilyIndex = plane->get_queue_family_idx(),
+              .dstQueueFamilyIndex = dst_queue_family_idx,
+              .image = plane->get_image(),
+              .subresourceRange = plane->get_subresource_range(),
+          };
+          auto cmd_buf = temp_pools.begin(dst_queue_family_idx);
+          cmd_buf.begin(vk::CommandBufferBeginInfo{
+              .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+          cmd_buf.pipelineBarrier2(
+              vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+          cmd_buf.end();
+          temp_pools.end2(std::move(cmd_buf), dst_queue_family_idx, {},
+                          plane->wait_sem_info(),
+                          plane->signal_sem_info(
+                              vk::PipelineStageFlagBits2::eFragmentShader));
+          plane->commit_image_barrier(barrier);
+        }
+      } else if (needs_layout_transition) {
+        auto barrier = plane->image_barrier(
+            vk::PipelineStageFlagBits2::eFragmentShader,
+            vk::AccessFlagBits2::eShaderSampledRead,
+            vk::ImageLayout::eShaderReadOnlyOptimal, dst_queue_family_idx);
+        auto cmd_buf = temp_pools.begin(dst_queue_family_idx);
+        cmd_buf.begin(vk::CommandBufferBeginInfo{
+            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        cmd_buf.pipelineBarrier2(
+            vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+        cmd_buf.end();
+        temp_pools.end2(std::move(cmd_buf), dst_queue_family_idx, {},
+                        plane->wait_sem_info(),
+                        plane->signal_sem_info(barrier.dstStageMask));
+        plane->commit_image_barrier(barrier);
+      }
+    }
+  }
 };
 
 class VideoFrameData {
