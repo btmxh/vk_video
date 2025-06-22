@@ -32,8 +32,12 @@ int main(int argc, char *argv[]) {
   }());
 
   auto window = vkfw::createWindowUnique(640, 360, "vkvideo_player");
+  VkContext vk;
 
-  VkContext vk{*window};
+  auto surface = vk::raii::SurfaceKHR{
+      vk.get_instance(),
+      vkfw::createWindowSurface(*vk.get_instance(), *window)};
+
   auto video = medias::open_video(vk, argv[1]);
 
   vkr::CommandPool pool{
@@ -55,9 +59,9 @@ int main(int argc, char *argv[]) {
   auto recreate_swapchain = [&]() {
     auto [width, height] = window->getFramebufferSize();
     auto &pd = vk.get_physical_device();
-    auto caps = pd.getSurfaceCapabilitiesKHR(vk.get_surface());
+    auto caps = pd.getSurfaceCapabilitiesKHR(*surface);
     auto img_count = std::min(caps.minImageCount + 1, caps.maxImageCount);
-    auto formats = pd.getSurfaceFormatsKHR(vk.get_surface());
+    auto formats = pd.getSurfaceFormatsKHR(*surface);
     auto format = formats[0];
     if (auto it = std::find_if(formats.begin(), formats.end(),
                                [&](const auto format) {
@@ -72,7 +76,7 @@ int main(int argc, char *argv[]) {
     swapchain = vk::raii::SwapchainKHR{
         vk.get_device(),
         vk::SwapchainCreateInfoKHR{
-            .surface = vk.get_surface(),
+            .surface = *surface,
             .minImageCount = img_count,
             .imageFormat = swapchain_format = format.format,
             .imageColorSpace = format.colorSpace,

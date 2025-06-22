@@ -62,7 +62,7 @@ inline VKAPI_ATTR vk::Bool32 VKAPI_CALL default_debug_callback(
 
 class VkContext {
 public:
-  VkContext(vkfw::Window &window) {
+  VkContext(bool headless = false) {
     feature_chain.get<vk::PhysicalDeviceFeatures2>()
         .features.setVertexPipelineStoresAndAtomics(true)
         .setShaderInt64(true)
@@ -108,7 +108,6 @@ public:
     auto window_inst_exts = vkfw::getRequiredInstanceExtensions();
     std::vector<const char *> inst_exts;
 
-    bool headless = vkfw::getPlatform() == vkfw::Platform::eNull;
     if (!headless)
       inst_exts.insert(inst_exts.end(), window_inst_exts.begin(),
                        window_inst_exts.end());
@@ -157,11 +156,6 @@ public:
         inst_exts.end())
       debug_messenger =
           vk::raii::DebugUtilsMessengerEXT{instance, debug_msg_ci};
-
-    if (!headless) {
-      surface = vk::raii::SurfaceKHR{
-          instance, vkfw::createWindowSurface(*instance, window)};
-    }
 
     vk::raii::PhysicalDevices physical_devices{instance};
     if (physical_devices.empty()) {
@@ -484,7 +478,6 @@ public:
   vk::raii::Instance &get_instance() { return instance; }
   vk::raii::Device &get_device() { return device; }
   vk::raii::PhysicalDevice &get_physical_device() { return physical_device; }
-  vk::raii::SurfaceKHR &get_surface() { return surface; }
   vma::Allocator &get_vma_allocator() { return *allocator; }
 
   const tp::ffmpeg::BufferRef &get_hwaccel_ctx() const { return hwdevice_ctx; }
