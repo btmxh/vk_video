@@ -15,6 +15,7 @@ using DirectionSpecificStreamParameters =
 using SampleDataFormat = ::portaudio::SampleDataFormat;
 template <class T>
 using MemFunCallbackStream = ::portaudio::MemFunCallbackStream<T>;
-using PaStreamCallbackFlags = ::PaStreamCallbackFlags;
-using PaStreamCallbackTimeInfo = ::PaStreamCallbackTimeInfo;
+using FunCallbackStream = ::portaudio::FunCallbackStream;
+using StreamCallbackFlags = ::PaStreamCallbackFlags;
+using StreamCallbackTimeInfo = ::PaStreamCallbackTimeInfo;
 } // namespace vkvideo::tp::portaudio

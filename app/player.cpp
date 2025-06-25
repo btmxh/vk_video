@@ -8,8 +8,16 @@ import vkfw;
 using namespace vkvideo;
 using namespace vkvideo::medias;
 using namespace vkvideo::graphics;
-using namespace vkvideo::context;
 using namespace vkvideo::tp;
+
+constexpr i32 sample_rate = 48000;
+const auto ch_layout = ffmpeg::ch_layout_stereo;
+const ffmpeg::SampleFormat sample_fmt = ffmpeg::SampleFormat::AV_SAMPLE_FMT_FLT;
+const portaudio::SampleDataFormat sample_fmt_pa =
+    portaudio::SampleDataFormat::FLOAT32;
+
+vkvideo::UniqueAny launch_audio_playback(std::unique_ptr<Audio> audio,
+                                         vkvideo::Clock &clock);
 
 int main(int argc, char *argv[]) {
   namespace vkr = vk::raii;
@@ -32,7 +40,7 @@ int main(int argc, char *argv[]) {
   }());
 
   auto window = vkfw::createWindowUnique(640, 360, "vkvideo_player");
-  VkContext vk;
+  VkContext vk{};
 
   auto surface = vk::raii::SurfaceKHR{
       vk.get_instance(),
@@ -94,7 +102,11 @@ int main(int argc, char *argv[]) {
                           vk::ImageUsageFlagBits::eColorAttachment,
             .imageSharingMode = vk::SharingMode::eExclusive,
             .preTransform = caps.currentTransform,
-            .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+            .compositeAlpha =
+                caps.supportedCompositeAlpha &
+                        vk::CompositeAlphaFlagBitsKHR::ePreMultiplied
+                    ? vk::CompositeAlphaFlagBitsKHR::ePreMultiplied
+                    : vk::CompositeAlphaFlagBitsKHR::eOpaque,
             .presentMode = vk::PresentModeKHR::eFifo,
             .clipped = true,
             .oldSwapchain = *swapchain,
@@ -174,6 +186,20 @@ int main(int argc, char *argv[]) {
 
   VideoPipelineCache pipelines;
   SteadyClock clock;
+
+  std::unique_ptr<medias::Audio> audio = nullptr;
+  UniqueAny audio_system{};
+  try {
+    audio = std::make_unique<medias::AudioStream>(
+        argv[1], AudioFormat{
+                     .sample_fmt = sample_fmt,
+                     .ch_layout = ch_layout,
+                     .sample_rate = sample_rate,
+                 });
+    audio_system = launch_audio_playback(std::move(audio), clock);
+  } catch (std::exception &ex) {
+    std::println("Error opening audio stream: {}", ex.what());
+  }
 
   for (i32 i = 0; !window->shouldClose(); ++i) {
     vkfw::pollEvents();
@@ -270,7 +296,7 @@ int main(int argc, char *argv[]) {
           .loadOp = vk::AttachmentLoadOp::eClear,
           .storeOp = vk::AttachmentStoreOp::eStore,
           .clearValue = {vk::ClearColorValue{
-              .float32 = std::array<float, 4>{0.0f, 0.0f, 0.2f, 1.0f},
+              .float32 = std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f},
           }},
       };
       cmd_buf.beginRendering(vk::RenderingInfo{
@@ -398,4 +424,113 @@ int main(int argc, char *argv[]) {
 
   vk.get_device().waitIdle();
   return 0;
+}
+
+template <class T> class WeightedRunningAvg {
+public:
+  WeightedRunningAvg(i32 max_count, double coeff)
+      : coeff{coeff}, max_count{max_count} {}
+
+  std::optional<T> update(T value) {
+    cum_value = value + coeff * cum_value;
+    if (count < max_count) {
+      ++count;
+      return std::nullopt;
+    }
+
+    return cum_value * (1 - coeff);
+  }
+
+  void reset() {
+    cum_value = 0;
+    count = 0;
+  }
+
+private:
+  T cum_value = 0;
+  i32 count = 0, max_count = 0;
+  double coeff = 0.0;
+};
+
+// assumes buffer is interleaved
+void fill_silence(void *buffer, i32 offset, i32 num_frames) {
+  auto sample_size =
+      ffmpeg::get_sample_fmt_size(sample_fmt) * ch_layout->nb_channels;
+  auto zero_byte =
+      sample_fmt == ffmpeg::SampleFormat::AV_SAMPLE_FMT_U8 ? 0x80 : 0;
+  auto buffer_u8 = static_cast<u8 *>(buffer);
+  std::memset(buffer_u8 + sample_size * offset, zero_byte,
+              num_frames * sample_size);
+}
+
+vkvideo::UniqueAny launch_audio_playback(std::unique_ptr<Audio> audio,
+                                         vkvideo::Clock &clock) {
+  namespace pa = tp::portaudio;
+  auto system = std::make_unique<pa::AutoSystem>();
+  auto &output_device = pa::System::instance().defaultOutputDevice();
+  auto delay_avg = std::make_unique<WeightedRunningAvg<i64>>(
+      20, std::exp(std::log(1e-2) / 20.0));
+  auto sync_resampler = std::make_unique<ffmpeg::AudioResampler>(
+      ffmpeg::AudioResampler::create(ch_layout, sample_fmt, sample_rate,
+                                     ch_layout, sample_fmt, sample_rate));
+  using UserPtrType = std::tuple<Audio &, Clock &, ffmpeg::AudioResampler &,
+                                 WeightedRunningAvg<i64> &>;
+  auto user_ptr =
+      std::make_unique<UserPtrType>(*audio, clock, *sync_resampler, *delay_avg);
+  auto audio_stream = std::make_unique<pa::FunCallbackStream>(
+      pa::StreamParameters{
+          pa::DirectionSpecificStreamParameters::null(),
+          pa::DirectionSpecificStreamParameters{
+              output_device, ch_layout->nb_channels, sample_fmt_pa, true,
+              output_device.defaultLowOutputLatency(), nullptr},
+          sample_rate,
+          1024,
+          0,
+      },
+      [](auto, void *output, unsigned long num_frames,
+         const pa::StreamCallbackTimeInfo *timeInfo, auto, void *userData) {
+        static constexpr i64 sec_to_ns = 1e9;
+        auto &&[audio, clock, resampler, delay_avg] =
+            *static_cast<UserPtrType *>(userData);
+        auto out_time = clock.get_time() + timeInfo->outputBufferDacTime -
+                        timeInfo->currentTime;
+        auto sync_delay = out_time - audio.get_time();
+        auto avg_sync_delay = delay_avg.update(sync_delay);
+
+        i32 num_wanted_frames = num_frames;
+        if (std::abs(sync_delay) < 1e8) {
+          if (avg_sync_delay.has_value() && std::abs(*avg_sync_delay) >= 1e7) {
+            num_wanted_frames =
+                num_frames + sync_delay * sample_rate / sec_to_ns;
+            num_wanted_frames = std::clamp<i32>(
+                num_wanted_frames, num_frames * 0.9, num_frames * 1.1);
+          }
+        } else {
+          delay_avg.reset();
+          audio.seek(out_time);
+          std::println("Seeking audio due to A/V drift...");
+        }
+
+        auto frame = ffmpeg::Frame::create();
+        frame->sample_rate = sample_rate;
+        frame->ch_layout = *ch_layout.get();
+        frame->format = sample_fmt;
+        frame->nb_samples = num_wanted_frames;
+        frame.get_buffer();
+        frame.make_writable();
+        num_wanted_frames = audio.get_samples(num_frames, frame->data);
+
+        resampler.send(num_wanted_frames, frame->data);
+        resampler.set_compensation(
+            num_wanted_frames - static_cast<i32>(num_frames), num_frames);
+        auto out = static_cast<u8 *>(output);
+        auto offset = resampler.recv(num_frames, &out);
+        fill_silence(output, offset, num_frames - offset);
+        return 0;
+      },
+      user_ptr.get());
+  audio_stream->start();
+  return std::tuple{std::move(system),    std::move(audio_stream),
+                    std::move(audio),     std::move(sync_resampler),
+                    std::move(delay_avg), std::move(user_ptr)};
 }

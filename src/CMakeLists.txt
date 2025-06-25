@@ -1,6 +1,10 @@
 add_library(vkvideo)
 
-add_shaders(vkvideo_fullscreen_shaders medias/fullscreen.vert medias/fullscreen.frag)
+add_shaders(
+    vkvideo_fullscreen_shaders
+    medias/fullscreen.vert
+    medias/fullscreen.frag
+)
 add_dependencies(vkvideo vkvideo_fullscreen_shaders)
 
 target_sources(
@@ -31,9 +35,6 @@ target_sources(
             medias/output.cppm
             medias/pipeline.cppm
             medias/mod.cppm
-            context/context.cppm
-            context/avsync.cppm
-            context/mod.cppm
             mod.cppm
     PRIVATE medias/video_formats.cpp
     # context/context.cpp graphics/vk.cpp graphics/vma.cpp graphics/tx.cpp

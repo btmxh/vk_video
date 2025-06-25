@@ -157,6 +157,7 @@ public:
   void ref_to(const Frame &other) { av_frame_ref(get(), other.get()); }
   void unref() { av_frame_unref(get()); }
   void get_buffer(int align = 1) { av_call(av_frame_get_buffer(get(), align)); }
+  void make_writable() { av_call(av_frame_make_writable(get())); }
 };
 
 template <class Deleter>
@@ -397,6 +398,7 @@ public:
   }
 
   AVChannelLayout *operator->() { return &layout; }
+  const AVChannelLayout *operator->() const { return &layout; }
   AVChannelLayout *get() { return &layout; }
   const AVChannelLayout *get() const { return &layout; }
 
