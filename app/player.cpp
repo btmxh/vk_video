@@ -242,7 +242,10 @@ int main(int argc, char *argv[]) {
         (*locked_frame_data)
             ->layout_transition(video_frame->frame_index,
                                 vk.get_queues().get_qf_graphics(),
-                                vk.get_temp_pools());
+                                vk.get_temp_pools(),
+                                vk::PipelineStageFlagBits2::eFragmentShader,
+                                vk::AccessFlagBits2::eShaderSampledRead,
+                                vk::ImageLayout::eShaderReadOnlyOptimal);
 
         vk::DescriptorImageInfo desc_sampler{
             .sampler = pipeline->sampler,

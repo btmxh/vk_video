@@ -31,6 +31,7 @@ target_sources(
             medias/audio.cppm
             medias/video.cppm
             medias/video_frame.cppm
+            medias/hwrescale.cppm
             medias/stream.cppm
             medias/output.cppm
             medias/pipeline.cppm
@@ -50,15 +51,19 @@ configure_file(
 target_include_directories(vkvideo PUBLIC "${VkVideo_BINARY_DIR}/include")
 target_compile_features(vkvideo PUBLIC cxx_std_23)
 
+cmrc_add_resource_library(vkvideo_shaders ALIAS vkvideo::shaders medias/hwrescale.comp)
+
 target_link_libraries(
     vkvideo
     PUBLIC
         vkvideo_VulkanHpp
+        vkvideo::shaders
         vkfw-module
         vma
         vk-bootstrap
         FFmpeg::FFmpeg
         PortAudioCpp::PortAudioCpp
+        shaderc
 )
 
 if(WebP_FOUND)

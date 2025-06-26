@@ -22,3 +22,10 @@ target_include_directories(
 target_compile_features(vma PUBLIC cxx_std_23)
 target_link_libraries(vma PUBLIC vkvideo_VulkanHpp)
 target_compile_definitions(vma PRIVATE VMA_ENABLE_VULKAN_HPP_MODULE)
+
+add_subdirectory(cmrc)
+
+# workaround for glslang-shaderc compatibility idk why
+add_compile_definitions(ENABLE_HLSL)
+set(SHADERC_SKIP_TESTS ON CACHE BOOL "" FORCE)
+add_subdirectory(shaderc)

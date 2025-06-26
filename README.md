@@ -6,7 +6,7 @@ Current status:
 - [x] Decoding
 - [x] Presenting
 - [x] Audio
-- [ ] Encoding
+- [x] Encoding
 
 ## Build
 
@@ -35,4 +35,5 @@ build/app/vkvideo_app ~/Videos/untitled.mp4
 
 Currently, the program will play the given video over and over again.
 
+## Pending issues
 

@@ -125,8 +125,7 @@ public:
   void commit_image_barrier(const vk::ImageMemoryBarrier2 &barrier,
                             u64 new_sem_value,
                             vk::Semaphore new_sem = nullptr) {
-    // maybe equal is somewhat acceptable?
-    assert(get_semaphore_value() < new_sem_value);
+    assert(get_semaphore_value() <= new_sem_value);
     set_stage_flag(barrier.dstStageMask);
     set_access_flag(barrier.dstAccessMask);
     set_image_layout(barrier.newLayout);
@@ -174,13 +173,15 @@ public:
   // maybe related:
   // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10185
   void layout_transition(std::optional<i32> frame_idx, u32 dst_queue_family_idx,
-                         graphics::TempCommandPools &temp_pools) {
+                         graphics::TempCommandPools &temp_pools,
+                         vk::PipelineStageFlags2 stage_flags,
+                         vk::AccessFlags2 access_flags,
+                         vk::ImageLayout layout) {
     for (auto &plane : get_planes()) {
       auto needs_ownership_transfer =
           plane->get_queue_family_idx() != dst_queue_family_idx &&
           plane->get_queue_family_idx() != vk::QueueFamilyIgnored;
-      auto needs_layout_transition =
-          plane->get_image_layout() != vk::ImageLayout::eShaderReadOnlyOptimal;
+      auto needs_layout_transition = plane->get_image_layout() != layout;
       if (needs_ownership_transfer) {
         // transfer release
         {
@@ -190,7 +191,7 @@ public:
               .dstStageMask = vk::PipelineStageFlagBits2::eNone,
               .dstAccessMask = vk::AccessFlagBits2::eNone,
               .oldLayout = plane->get_image_layout(),
-              .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+              .newLayout = layout,
               .srcQueueFamilyIndex = plane->get_queue_family_idx(),
               .dstQueueFamilyIndex = dst_queue_family_idx,
               .image = plane->get_image(),
@@ -214,10 +215,10 @@ public:
           vk::ImageMemoryBarrier2 barrier{
               .srcStageMask = vk::PipelineStageFlagBits2::eNone,
               .srcAccessMask = vk::AccessFlagBits2::eNone,
-              .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
-              .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+              .dstStageMask = stage_flags,
+              .dstAccessMask = access_flags,
               .oldLayout = plane->get_image_layout(),
-              .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+              .newLayout = layout,
               .srcQueueFamilyIndex = plane->get_queue_family_idx(),
               .dstQueueFamilyIndex = dst_queue_family_idx,
               .image = plane->get_image(),
@@ -231,15 +232,12 @@ public:
           cmd_buf.end();
           temp_pools.end2(std::move(cmd_buf), dst_queue_family_idx, {},
                           plane->wait_sem_info(),
-                          plane->signal_sem_info(
-                              vk::PipelineStageFlagBits2::eFragmentShader));
+                          plane->signal_sem_info(stage_flags));
           plane->commit_image_barrier(barrier);
         }
       } else if (needs_layout_transition) {
-        auto barrier = plane->image_barrier(
-            vk::PipelineStageFlagBits2::eFragmentShader,
-            vk::AccessFlagBits2::eShaderSampledRead,
-            vk::ImageLayout::eShaderReadOnlyOptimal, dst_queue_family_idx);
+        auto barrier = plane->image_barrier(stage_flags, access_flags, layout,
+                                            dst_queue_family_idx);
         auto cmd_buf = temp_pools.begin(dst_queue_family_idx);
         cmd_buf.begin(vk::CommandBufferBeginInfo{
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
@@ -462,6 +460,8 @@ public:
   std::unique_ptr<LockedVideoFrameData> lock() override {
     return std::make_unique<FFmpegLockedVideoFrameData>(frame, frame_lock);
   }
+
+  tp::ffmpeg::Frame &get() { return frame; }
 
 private:
   tp::ffmpeg::Frame frame;

@@ -4,3 +4,9 @@
 [submodule "extern/VulkanMemoryAllocator-Hpp"]
 	path = extern/VulkanMemoryAllocator-Hpp
 	url = https://github.com/YaaZ/VulkanMemoryAllocator-Hpp
+[submodule "extern/cmrc"]
+	path = extern/cmrc
+	url = https://github.com/vector-of-bool/cmrc
+[submodule "extern/shaderc"]
+	path = extern/shaderc
+	url = https://github.com/google/shaderc

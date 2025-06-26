@@ -1,5 +1,7 @@
-# add_shaders(vkvideo_app_shaders shaders/fullscreen.vert shaders/fullscreen.frag)
 add_executable(vkvideo_player player.cpp)
 target_link_libraries(vkvideo_player PRIVATE vkvideo vkvideo_VulkanHpp)
 target_compile_features(vkvideo_player PRIVATE cxx_std_23)
-# add_dependencies(vkvideo_player vkvideo_app_shaders)
+
+add_executable(vkvideo_transcode transcode.cpp)
+target_link_libraries(vkvideo_transcode PRIVATE vkvideo vkvideo_VulkanHpp)
+target_compile_features(vkvideo_transcode PRIVATE cxx_std_23)

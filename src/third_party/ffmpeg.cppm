@@ -262,6 +262,10 @@ public:
     }
   }
 
+  bool has_global_header_flag() {
+    return get()->oformat->flags & AVFMT_GLOBALHEADER;
+  }
+
   void begin() {
     open_file_if_needed();
     av_call(avformat_write_header(get(), nullptr));
@@ -289,6 +293,12 @@ inline OutputFormat guess_output_format(std::string_view short_name = {},
 
 inline Codec find_enc_codec(AVCodecID id) { return avcodec_find_encoder(id); }
 inline Codec find_dec_codec(AVCodecID id) { return avcodec_find_decoder(id); }
+inline Codec find_enc_codec(const char *name) {
+  return avcodec_find_encoder_by_name(name);
+}
+inline Codec find_dec_codec(const char *name) {
+  return avcodec_find_decoder_by_name(name);
+}
 
 class CodecContext
     : public std::unique_ptr<AVCodecContext, detail::CodecContextDeleter> {
@@ -307,6 +317,8 @@ public:
   }
 
   void open() { av_call(avcodec_open2(get(), nullptr, nullptr)); }
+
+  void add_global_header_flag() { get()->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; }
 
   void copy_params_from(const AVCodecParameters *params) {
     av_call(avcodec_parameters_to_context(get(), params));
