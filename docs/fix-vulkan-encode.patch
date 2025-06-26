@@ -1,0 +1,14 @@
+diff --git a/libavcodec/vulkan_encode.c b/libavcodec/vulkan_encode.c
+index d187b7cdd3..85491b650c 100644
+--- a/libavcodec/vulkan_encode.c
++++ b/libavcodec/vulkan_encode.c
+@@ -934,8 +934,7 @@ av_cold int ff_vulkan_encode_init(AVCodecContext *avctx, FFVulkanEncodeContext *
+         return AVERROR(EINVAL);
+     }
+ 
+-    fmt_info.imageUsage = VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR |
+-                          VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR;
++    fmt_info.imageUsage = VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR;
+ 
+     ctx->common.layered_dpb = !(ctx->caps.flags & VK_VIDEO_CAPABILITY_SEPARATE_REFERENCE_IMAGES_BIT_KHR);
+ 

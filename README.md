@@ -52,5 +52,9 @@ build/app/vkvideo_transcode ~/Videos/untitled.mp4 output.mp4
 
 ### Transcoding example
 
+- [x] Unable to open FFmpeg HWAccel encoder because of missing Vulkan formats.
+      See `docs/fix-vulkan-encode.patch` for my patch of FFmpeg that fix the
+      issue. No idea why `VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR` is set even
+      though it should be reserved for future use.
 - [ ] `hw_frames_ctx` is not cleaned up properly.
 - [ ] Race conditions on the output render target frame.
