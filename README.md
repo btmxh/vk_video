@@ -14,26 +14,43 @@ First, clone the repo with submodules:
 ```sh
 git clone https://github.com/btmxh/vk_video.git --recurse-submodules
 cd vk_video
+# sync shaderc dependencies
+./extern/shaderc/utils/git-sync-deps
 ```
+
+Since `shaderc` requires other dependencies, 
 
 Then, install Vulkan and FFmpeg (libraries). After that configure and build:
 ```sh
-cmake -S. -Bbuild
+# if you built FFmpeg from scratch for a better debugging experience,
+# override the pkg-config paths for FFmpeg
+export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig/
 
-# or if you built ffmpeg from scratch for a better debugging experience,
-# override the pkg-config paths
-PKG_CONFIG_PATH=/usr/local/lib/pkgconfig/ cmake -S. -Bbuild
+# configure
+cmake -S. -Bbuild
 
 # build
 cmake --build build -j
 ```
 
-Finally run the application against a video file:
+Run the video player for an video file:
 ```
-build/app/vkvideo_app ~/Videos/untitled.mp4
+build/app/vkvideo_player ~/Videos/untitled.mp4
 ```
 
-Currently, the program will play the given video over and over again.
+Run the transcoding example (re-encode a given video using GPU):
+```
+build/app/vkvideo_transcode ~/Videos/untitled.mp4 output.mp4
+```
 
 ## Pending issues
 
+### Video player
+
+- [ ] Running with GPU-assisted validation gives validation errors.
+      [Maybe related](https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10185).
+
+### Transcoding example
+
+- [ ] `hw_frames_ctx` is not cleaned up properly.
+- [ ] Race conditions on the output render target frame.
