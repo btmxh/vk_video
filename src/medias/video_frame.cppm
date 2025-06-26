@@ -28,6 +28,7 @@ struct HWVideoFormat {
 };
 
 extern const HWVideoFormat *get_hw_video_format(vk::Format format);
+extern std::vector<HWVideoFormat> get_all_formats();
 
 class AVVkFrameLock {
 public:
@@ -124,8 +125,7 @@ public:
   void commit_image_barrier(const vk::ImageMemoryBarrier2 &barrier,
                             u64 new_sem_value,
                             vk::Semaphore new_sem = nullptr) {
-    // maybe equal is somewhat acceptable?
-    assert(get_semaphore_value() < new_sem_value);
+    assert(get_semaphore_value() <= new_sem_value);
     set_stage_flag(barrier.dstStageMask);
     set_access_flag(barrier.dstAccessMask);
     set_image_layout(barrier.newLayout);
@@ -150,11 +150,11 @@ public:
     commit_image_barrier(barrier, get_semaphore_value() + 1);
   }
 
-  vk::SemaphoreSubmitInfo signal_sem_info() {
+  vk::SemaphoreSubmitInfo signal_sem_info(vk::PipelineStageFlags2 mask) {
     return vk::SemaphoreSubmitInfo{
         .semaphore = get_semaphore(),
         .value = get_semaphore_value() + 1,
-        .stageMask = get_stage_flag(),
+        .stageMask = mask,
     };
   }
 };
@@ -168,6 +168,89 @@ public:
   virtual std::pair<i32, i32> get_extent() const = 0;
 
   virtual std::pair<i32, i32> get_padded_extent() const { return get_extent(); }
+
+  // FIXME: transition layout validation error on HWAccel GPU-assisted
+  // maybe related:
+  // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10185
+  void layout_transition(std::optional<i32> frame_idx, u32 dst_queue_family_idx,
+                         graphics::TempCommandPools &temp_pools,
+                         vk::PipelineStageFlags2 stage_flags,
+                         vk::AccessFlags2 access_flags,
+                         vk::ImageLayout layout) {
+    for (auto &plane : get_planes()) {
+      auto needs_ownership_transfer =
+          plane->get_queue_family_idx() != dst_queue_family_idx &&
+          plane->get_queue_family_idx() != vk::QueueFamilyIgnored;
+      auto needs_layout_transition = plane->get_image_layout() != layout;
+      if (needs_ownership_transfer) {
+        // transfer release
+        {
+          vk::ImageMemoryBarrier2 barrier{
+              .srcStageMask = plane->get_stage_flag(),
+              .srcAccessMask = plane->get_access_flag(),
+              .dstStageMask = vk::PipelineStageFlagBits2::eNone,
+              .dstAccessMask = vk::AccessFlagBits2::eNone,
+              .oldLayout = plane->get_image_layout(),
+              .newLayout = layout,
+              .srcQueueFamilyIndex = plane->get_queue_family_idx(),
+              .dstQueueFamilyIndex = dst_queue_family_idx,
+              .image = plane->get_image(),
+              .subresourceRange = plane->get_subresource_range(),
+          };
+          auto cmd_buf = temp_pools.begin(plane->get_queue_family_idx());
+          cmd_buf.begin(vk::CommandBufferBeginInfo{
+              .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+          cmd_buf.pipelineBarrier2(
+              vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+          cmd_buf.end();
+          temp_pools.end2(
+              std::move(cmd_buf), plane->get_queue_family_idx(), {},
+              plane->wait_sem_info(),
+              plane->signal_sem_info(vk::PipelineStageFlagBits2::eAllCommands));
+        }
+        plane->set_semaphore_value(plane->get_semaphore_value() + 1);
+        plane->set_stage_flag(vk::PipelineStageFlagBits2::eAllCommands);
+        // graphics acquire
+        {
+          vk::ImageMemoryBarrier2 barrier{
+              .srcStageMask = vk::PipelineStageFlagBits2::eNone,
+              .srcAccessMask = vk::AccessFlagBits2::eNone,
+              .dstStageMask = stage_flags,
+              .dstAccessMask = access_flags,
+              .oldLayout = plane->get_image_layout(),
+              .newLayout = layout,
+              .srcQueueFamilyIndex = plane->get_queue_family_idx(),
+              .dstQueueFamilyIndex = dst_queue_family_idx,
+              .image = plane->get_image(),
+              .subresourceRange = plane->get_subresource_range(),
+          };
+          auto cmd_buf = temp_pools.begin(dst_queue_family_idx);
+          cmd_buf.begin(vk::CommandBufferBeginInfo{
+              .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+          cmd_buf.pipelineBarrier2(
+              vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+          cmd_buf.end();
+          temp_pools.end2(std::move(cmd_buf), dst_queue_family_idx, {},
+                          plane->wait_sem_info(),
+                          plane->signal_sem_info(stage_flags));
+          plane->commit_image_barrier(barrier);
+        }
+      } else if (needs_layout_transition) {
+        auto barrier = plane->image_barrier(stage_flags, access_flags, layout,
+                                            dst_queue_family_idx);
+        auto cmd_buf = temp_pools.begin(dst_queue_family_idx);
+        cmd_buf.begin(vk::CommandBufferBeginInfo{
+            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        cmd_buf.pipelineBarrier2(
+            vk::DependencyInfo{}.setImageMemoryBarriers(barrier));
+        cmd_buf.end();
+        temp_pools.end2(std::move(cmd_buf), dst_queue_family_idx, {},
+                        plane->wait_sem_info(),
+                        plane->signal_sem_info(barrier.dstStageMask));
+        plane->commit_image_barrier(barrier);
+      }
+    }
+  }
 };
 
 class VideoFrameData {
@@ -293,7 +376,7 @@ public:
     return static_cast<vk::ImageLayout>(frame->layout[plane_index]);
   }
   vk::PipelineStageFlags2 get_stage_flag() const override {
-    return vk::PipelineStageFlagBits2::eBottomOfPipe;
+    return vk::PipelineStageFlagBits2::eAllCommands;
   }
   vk::AccessFlags2 get_access_flag() const override {
     return static_cast<vk::AccessFlags2>(frame->access[plane_index]);
@@ -314,7 +397,7 @@ public:
         static_cast<std::decay_t<decltype(frame->layout[plane_index])>>(value);
   }
   void set_stage_flag(vk::PipelineStageFlags2 value) override {
-    // (hardcoded getter returns BottomOfPipe, so you probably don't need to
+    // (hardcoded getter returns eAllCommands, so you probably don't need to
     // store this — no-op) if needed, you could store somewhere
   }
 
@@ -377,6 +460,8 @@ public:
   std::unique_ptr<LockedVideoFrameData> lock() override {
     return std::make_unique<FFmpegLockedVideoFrameData>(frame, frame_lock);
   }
+
+  tp::ffmpeg::Frame &get() { return frame; }
 
 private:
   tp::ffmpeg::Frame frame;
@@ -508,7 +593,7 @@ VideoFrame upload_frames_to_gpu(graphics::VkContext &vk,
   cmd_buf.begin(vk::CommandBufferBeginInfo{
       .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
   vk::ImageMemoryBarrier2 img_barrier{
-      .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+      .srcStageMask = vk::PipelineStageFlagBits2::eNone,
       .srcAccessMask = vk::AccessFlagBits2::eNone,
       .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
       .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -537,9 +622,16 @@ VideoFrame upload_frames_to_gpu(graphics::VkContext &vk,
                                       static_cast<u32>(height), 1},
       });
   cmd_buf.end();
-  auto [sem, sem_value] = tx_pool.end(
-      std::move(cmd_buf), vk.get_queues().get_qf_transfer(), std::move(buffer),
-      {}, {}, vk::PipelineStageFlagBits2::eTransfer);
+  graphics::TimelineSemaphore sem{vk.get_device(), 0, "video_frame_tlsem"};
+  u64 sem_value = 1;
+  tx_pool.end2(std::move(cmd_buf), vk.get_queues().get_qf_transfer(),
+               std::move(buffer), {},
+               vk::SemaphoreSubmitInfo{
+                   .semaphore = *sem,
+                   .value = sem_value,
+                   .stageMask = vk::PipelineStageFlagBits2::eTransfer,
+               },
+               vk::PipelineStageFlagBits2::eTransfer);
 
   std::vector<StructVideoFramePlaneData> planes;
   planes.emplace_back(StructVideoFramePlaneData{

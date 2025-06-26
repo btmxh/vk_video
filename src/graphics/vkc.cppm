@@ -20,7 +20,6 @@ import vkvideo.core;
 import vkvideo.third_party;
 import :queues;
 import :temppools;
-import :swapchain;
 import :vku;
 
 export namespace vkvideo::graphics {
@@ -63,7 +62,7 @@ inline VKAPI_ATTR vk::Bool32 VKAPI_CALL default_debug_callback(
 
 class VkContext {
 public:
-  VkContext(vkfw::Window &window) {
+  VkContext(bool headless = false) {
     feature_chain.get<vk::PhysicalDeviceFeatures2>()
         .features.setVertexPipelineStoresAndAtomics(true)
         .setShaderInt64(true)
@@ -109,7 +108,6 @@ public:
     auto window_inst_exts = vkfw::getRequiredInstanceExtensions();
     std::vector<const char *> inst_exts;
 
-    bool headless = vkfw::getPlatform() == vkfw::Platform::eNull;
     if (!headless)
       inst_exts.insert(inst_exts.end(), window_inst_exts.begin(),
                        window_inst_exts.end());
@@ -158,11 +156,6 @@ public:
         inst_exts.end())
       debug_messenger =
           vk::raii::DebugUtilsMessengerEXT{instance, debug_msg_ci};
-
-    if (!headless) {
-      surface = vk::raii::SurfaceKHR{
-          instance, vkfw::createWindowSurface(*instance, window)};
-    }
 
     vk::raii::PhysicalDevices physical_devices{instance};
     if (physical_devices.empty()) {
@@ -471,18 +464,6 @@ public:
     qf_transfer = vk_device_ctx.queue_family_tx_index;
     queues.init(device, qf_graphics, qf_compute, qf_transfer,
                 std::move(video_qf_indices));
-
-    if (!headless) {
-      swapchain_ctx.emplace(physical_device, device, window, surface, 3);
-
-      window.callbacks()->on_framebuffer_resize =
-          [&](vkfw::Window w, size_t width, size_t height) {
-            if (width > 0 && height > 0 && swapchain_ctx.has_value())
-              swapchain_ctx->recreate(static_cast<i32>(width),
-                                      static_cast<i32>(height));
-          };
-    }
-
     tx_pool.init(device, queues);
   }
 
@@ -501,9 +482,6 @@ public:
 
   const tp::ffmpeg::BufferRef &get_hwaccel_ctx() const { return hwdevice_ctx; }
   QueueManager &get_queues() { return queues; }
-  VkSwapchainContext *get_swapchain_ctx() {
-    return swapchain_ctx.has_value() ? &*swapchain_ctx : nullptr;
-  }
   TempCommandPools &get_temp_pools() { return tx_pool; }
 
   void set_debug_label(VulkanHandle handle, const char *name) {
@@ -528,7 +506,7 @@ private:
 
   QueueManager queues;
   TempCommandPools tx_pool;
-  std::optional<VkSwapchainContext> swapchain_ctx;
+  // std::unique_ptr<RenderTarget> render_target = nullptr;
 };
 
 } // namespace vkvideo::graphics

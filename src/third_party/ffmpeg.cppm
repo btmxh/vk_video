@@ -135,6 +135,10 @@ public:
   static Packet create() { return Packet{av_packet_alloc()}; }
 
   void unref() const { av_packet_unref(get()); }
+
+  void rescale_ts(AVRational tb_src, AVRational tb_dst) noexcept {
+    av_packet_rescale_ts(get(), tb_src, tb_dst);
+  }
 };
 
 class Frame : public std::unique_ptr<AVFrame, detail::FrameDeleter> {
@@ -153,6 +157,7 @@ public:
   void ref_to(const Frame &other) { av_frame_ref(get(), other.get()); }
   void unref() { av_frame_unref(get()); }
   void get_buffer(int align = 1) { av_call(av_frame_get_buffer(get(), align)); }
+  void make_writable() { av_call(av_frame_make_writable(get())); }
 };
 
 template <class Deleter>
@@ -257,6 +262,10 @@ public:
     }
   }
 
+  bool has_global_header_flag() {
+    return get()->oformat->flags & AVFMT_GLOBALHEADER;
+  }
+
   void begin() {
     open_file_if_needed();
     av_call(avformat_write_header(get(), nullptr));
@@ -272,6 +281,7 @@ private:
   std::unique_ptr<AVIOContext, detail::AVIOContextDeleter> avio;
 };
 
+using Stream = AVStream;
 using OutputFormat = const AVOutputFormat *;
 using Codec = const AVCodec *;
 
@@ -283,6 +293,12 @@ inline OutputFormat guess_output_format(std::string_view short_name = {},
 
 inline Codec find_enc_codec(AVCodecID id) { return avcodec_find_encoder(id); }
 inline Codec find_dec_codec(AVCodecID id) { return avcodec_find_decoder(id); }
+inline Codec find_enc_codec(const char *name) {
+  return avcodec_find_encoder_by_name(name);
+}
+inline Codec find_dec_codec(const char *name) {
+  return avcodec_find_decoder_by_name(name);
+}
 
 class CodecContext
     : public std::unique_ptr<AVCodecContext, detail::CodecContextDeleter> {
@@ -301,6 +317,8 @@ public:
   }
 
   void open() { av_call(avcodec_open2(get(), nullptr, nullptr)); }
+
+  void add_global_header_flag() { get()->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; }
 
   void copy_params_from(const AVCodecParameters *params) {
     av_call(avcodec_parameters_to_context(get(), params));
@@ -337,8 +355,11 @@ public:
   }
 
   // ENCODE
-  void send_frame(const Frame &frame) {
-    av_call(avcodec_send_frame(get(), frame.get()));
+  bool send_frame(const Frame &frame) {
+    int err = avcodec_send_frame(get(), frame.get());
+    if (err != 0 && err != AVERROR_EOF)
+      av_call(err);
+    return err == 0;
   }
 
   std::pair<Packet, RecvError> recv_packet(Packet &&packet = nullptr) {
@@ -389,6 +410,7 @@ public:
   }
 
   AVChannelLayout *operator->() { return &layout; }
+  const AVChannelLayout *operator->() const { return &layout; }
   AVChannelLayout *get() { return &layout; }
   const AVChannelLayout *get() const { return &layout; }
 
@@ -469,6 +491,7 @@ using PixelFormatDescriptor = AVPixFmtDescriptor;
 
 enum class PixelFormatFlagBits : int {
   eRgb = AV_PIX_FMT_FLAG_RGB,
+  eBitstream = AV_PIX_FMT_FLAG_BITSTREAM,
   eHasAlpha = AV_PIX_FMT_FLAG_ALPHA,
 };
 

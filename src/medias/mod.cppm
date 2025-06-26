@@ -5,3 +5,6 @@ export import :audio;
 export import :video;
 export import :video_frame;
 export import :stream;
+export import :output;
+export import :pipeline;
+export import :hwrescale;

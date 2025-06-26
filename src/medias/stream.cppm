@@ -224,8 +224,9 @@ class AnimWebPStream : public Stream {
 public:
   AnimWebPStream(std::vector<char> data)
       : data{std::move(data)},
-        decoder{std::span<const u8>{reinterpret_cast<const u8 *>(data.data()),
-                                    data.size()}} {}
+        decoder{
+            std::span<const u8>{reinterpret_cast<const u8 *>(this->data.data()),
+                                this->data.size()}} {}
   ~AnimWebPStream() = default;
 
   std::pair<tp::ffmpeg::Frame, bool>

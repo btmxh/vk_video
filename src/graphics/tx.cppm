@@ -37,15 +37,17 @@ public:
                      .level = vk::CommandBufferLevel::ePrimary,
                      .commandBufferCount = 1,
                  }};
+    auto name = std::format("temp_cmd[{}]", qf_idx);
+    set_debug_label(*device, *buffers[0], name.c_str());
     return std::move(buffers[0]);
   }
 
   std::pair<std::shared_ptr<TimelineSemaphore>, u64>
-  end(vk::raii::CommandBuffer cmd_buf, i32 qf_idx,
-      UniqueAny free_on_finish = {},
-      const vk::ArrayProxy<vk::SemaphoreSubmitInfo> &wait_sems = {},
-      const vk::ArrayProxy<vk::SemaphoreSubmitInfo> &signal_sems = {},
-      vk::PipelineStageFlags2 additional_stage_mask = {}) {
+  end2(vk::raii::CommandBuffer cmd_buf, i32 qf_idx,
+       UniqueAny free_on_finish = {},
+       const vk::ArrayProxy<const vk::SemaphoreSubmitInfo> &wait_sems = {},
+       const vk::ArrayProxy<const vk::SemaphoreSubmitInfo> &signal_sems = {},
+       vk::PipelineStageFlags2 additional_stage_mask = {}) {
     static const u64 sem_value = 1;
     std::scoped_lock _lck{mutex};
     auto name = std::format("task_sem[{}-{}]", qf_idx, 367);
@@ -66,8 +68,7 @@ public:
     signal_sem_infos.push_back(vk::SemaphoreSubmitInfo{
         .semaphore = *op.sem,
         .value = static_cast<u64>(sem_value),
-        .stageMask =
-            vk::PipelineStageFlagBits2::eBottomOfPipe | additional_stage_mask,
+        .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
     });
 
     auto [queue_lock, queue] = queues->get_queue(qf_idx);
